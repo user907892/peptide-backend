@@ -146,7 +146,7 @@ app.post("/create-checkout-session", async function (req, res) {
     const subtotal = calculateSubtotalCents(normalizedItems);
     const shippingOptions = getShippingOptions(subtotal);
 
-    // ✅ USE REAL STRIPE PRICE IDs INSTEAD OF price_data
+    // ✅ Use real Stripe price IDs
     const stripeLineItems = normalizedItems.map(function (item) {
       const info = priceInfo[item.priceId];
       if (!info) {
@@ -154,7 +154,7 @@ app.post("/create-checkout-session", async function (req, res) {
       }
 
       return {
-        price: item.priceId,      // <--- Stripe price_... id
+        price: item.priceId,
         quantity: item.quantity,
       };
     });
@@ -169,7 +169,6 @@ app.post("/create-checkout-session", async function (req, res) {
       customer_creation: "always",
       phone_number_collection: { enabled: true },
 
-      // ✅ LIVE FRONTEND URLS
       success_url: 
 "https://arcticlabsupply.com/success?session_id={CHECKOUT_SESSION_ID}",
       cancel_url: "https://arcticlabsupply.com/cart",
