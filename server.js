@@ -7,6 +7,8 @@ app.use(cors());
 app.use(express.json());
 
 // Stripe secret key from environment (Render / .env)
+// IMPORTANT: On Render, set STRIPE_SECRET_KEY = your sk_live_... key to 
+go live.
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
 // Default price for legacy single-product checkout (Tirzepatide 10mg)
@@ -144,7 +146,7 @@ app.post("/create-checkout-session", async function (req, res) {
     const subtotal = calculateSubtotalCents(normalizedItems);
     const shippingOptions = getShippingOptions(subtotal);
 
-    // Build line_items with price_data so we control names/prices
+    // ✅ USE REAL STRIPE PRICE IDs INSTEAD OF price_data
     const stripeLineItems = normalizedItems.map(function (item) {
       const info = priceInfo[item.priceId];
       if (!info) {
@@ -152,14 +154,8 @@ app.post("/create-checkout-session", async function (req, res) {
       }
 
       return {
+        price: item.priceId,      // <--- Stripe price_... id
         quantity: item.quantity,
-        price_data: {
-          currency: "usd",
-          unit_amount: info.amount,
-          product_data: {
-            name: info.name, // this is what shows in Stripe Checkout
-          },
-        },
       };
     });
 
@@ -170,9 +166,13 @@ app.post("/create-checkout-session", async function (req, res) {
         allowed_countries: ["US"],
       },
       shipping_options: shippingOptions,
-      // TODO: change these URLs to your real frontend domain when live
-      success_url: "http://localhost:5173/success",
-      cancel_url: "http://localhost:5173/cancel",
+      customer_creation: "always",
+      phone_number_collection: { enabled: true },
+
+      // ✅ LIVE FRONTEND URLS
+      success_url: 
+"https://arcticlabsupply.com/success?session_id={CHECKOUT_SESSION_ID}",
+      cancel_url: "https://arcticlabsupply.com/cart",
     });
 
     res.json({ url: session.url });
@@ -191,5 +191,4 @@ const port = process.env.PORT || 4242;
 app.listen(port, function () {
   console.log("Stripe backend running on port " + port);
 });
-
 
