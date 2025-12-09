@@ -8,7 +8,7 @@ app.use(express.json());
 
 // Stripe secret key from environment (Render / .env)
 // IMPORTANT: On Render, set STRIPE_SECRET_KEY = your sk_live_... key to 
-go live.
+
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
 // Default price for legacy single-product checkout (Tirzepatide 10mg)
