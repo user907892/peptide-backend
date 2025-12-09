@@ -6,14 +6,13 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ✅ Stripe secret key from environment
+// Stripe secret key from environment (Render / .env)
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
-// ✅ Default price for legacy single-product checkout
-const DEFAULT_PRICE_ID = "price_1ScBFWPj0EAH4VA9BFmmDSEH"; // 
-Tirzepatide-RUO 10mg
+// Default price for legacy single-product checkout (Tirzepatide 10mg)
+const DEFAULT_PRICE_ID = "price_1ScBFWPj0EAH4VA9BFmmDSEH";
 
-// ✅ Map: Stripe price ID -> { amount in cents, name shown in Checkout }
+// Map: Stripe price ID -> { amount in cents, name shown in Checkout }
 const priceInfo = {
   "price_1ScJgYPj0EAH4VA95T7gp8Az": {
     amount: 8000,
@@ -57,9 +56,9 @@ const priceInfo = {
   },
 };
 
-// ✅ Free shipping over $99, otherwise $6.95
+// Free shipping over $99, otherwise $6.95
 const FREE_THRESHOLD = 9900; // $99.00
-const STANDARD_SHIP = 695; // $6.95
+const STANDARD_SHIP = 695;   // $6.95
 
 function getShippingOptions(subtotalCents) {
   const deliveryEstimate = {
@@ -92,7 +91,7 @@ function getShippingOptions(subtotalCents) {
   ];
 }
 
-// ✅ Calculate subtotal from normalized items
+// Calculate subtotal from normalized items (using priceInfo)
 function calculateSubtotalCents(normalizedItems) {
   let subtotal = 0;
 
@@ -111,17 +110,17 @@ function calculateSubtotalCents(normalizedItems) {
   return subtotal;
 }
 
-// ✅ Simple health check
+// Simple health check
 app.get("/", function (req, res) {
   res.send("Arctic Lab backend is running.");
 });
 
-// ✅ Checkout endpoint
+// Checkout endpoint
 app.post("/create-checkout-session", async function (req, res) {
   try {
     let normalizedItems = [];
 
-    // 🛒 New style: { items: [{ price, quantity }, ...] }
+    // New style: { items: [{ price, quantity }, ...] }
     if (Array.isArray(req.body.items) && req.body.items.length > 0) {
       normalizedItems = req.body.items.map(function (item) {
         return {
@@ -130,8 +129,7 @@ app.post("/create-checkout-session", async function (req, res) {
         };
       });
     } else {
-      // 🧍 Legacy: { quantity } => falls back to default single product 
-(Triz)
+      // Legacy: { quantity } => falls back to default single product
       const quantity = req.body.quantity || 1;
       normalizedItems = [
         {
@@ -146,7 +144,7 @@ app.post("/create-checkout-session", async function (req, res) {
     const subtotal = calculateSubtotalCents(normalizedItems);
     const shippingOptions = getShippingOptions(subtotal);
 
-    // 🔁 Build line_items with price_data so WE control names/prices
+    // Build line_items with price_data so we control names/prices
     const stripeLineItems = normalizedItems.map(function (item) {
       const info = priceInfo[item.priceId];
       if (!info) {
@@ -159,7 +157,7 @@ app.post("/create-checkout-session", async function (req, res) {
           currency: "usd",
           unit_amount: info.amount,
           product_data: {
-            name: info.name, // 👈 This is what shows in Checkout
+            name: info.name, // this is what shows in Stripe Checkout
           },
         },
       };
@@ -172,7 +170,7 @@ app.post("/create-checkout-session", async function (req, res) {
         allowed_countries: ["US"],
       },
       shipping_options: shippingOptions,
-      // ⚠️ change these to your real frontend domain when live
+      // TODO: change these URLs to your real frontend domain when live
       success_url: "http://localhost:5173/success",
       cancel_url: "http://localhost:5173/cancel",
     });
@@ -193,4 +191,5 @@ const port = process.env.PORT || 4242;
 app.listen(port, function () {
   console.log("Stripe backend running on port " + port);
 });
+
 
