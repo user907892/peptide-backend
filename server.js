@@ -27,6 +27,8 @@ app.post("/create-checkout-session", async (req, res) => {
   try {
     const { items } = req.body;
 
+    console.log("Incoming checkout body:", req.body);
+
     // Basic validation
     if (!Array.isArray(items) || items.length === 0) {
       return res
