@@ -8,10 +8,10 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ✅ Stripe secret key from environment
+// ✅ Stripe secret key from environment (Render / local)
 if (!process.env.STRIPE_SECRET_KEY) {
-  console.warn("⚠️ STRIPE_SECRET_KEY is not set. Set it in your Render / 
-env vars.");
+  console.warn("⚠️ STRIPE_SECRET_KEY is not set. Set it in your Render env 
+vars.");
 }
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY || "");
 
@@ -21,12 +21,13 @@ app.get("/", (req, res) => {
 });
 
 // ✅ Create Checkout Session
-// Matches your frontend payload:
-// body = { items: [ { price: 'price_xxx', quantity: 2 }, ... ] }
+// Your frontend sends:
+// { items: [ { price: 'price_xxx', quantity: 2 }, ... ] }
 app.post("/create-checkout-session", async (req, res) => {
   try {
     const { items } = req.body;
 
+    // Basic validation
     if (!Array.isArray(items) || items.length === 0) {
       return res
         .status(400)
@@ -35,9 +36,8 @@ app.post("/create-checkout-session", async (req, res) => {
 
     // Map frontend items → Stripe line_items
     const line_items = items.map((item, index) => {
-      // Your frontend currently sends { price: p.stripePriceId, quantity 
-}
-      // But we'll be flexible and also accept priceId.
+      // Frontend sends { price: p.stripePriceId, quantity }
+      // but we'll also accept priceId just in case.
       const priceId = item.price || item.priceId;
 
       if (!priceId) {
