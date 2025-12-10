@@ -12,8 +12,8 @@ const app = express();
 app.use(express.json());
 app.use(
   cors({
-    origin: process.env.ORIGIN || "*", // you can tighten this to your 
-domain later
+    origin: process.env.ORIGIN || "*", // you can lock this to your domain 
+later
   })
 );
 
