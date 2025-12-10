@@ -33,12 +33,22 @@ const allowedOrigins =
   ];
 
 app.use(express.json());
+
 app.use(
   cors({
-    origin: process.env.ORIGIN || "*",
+    origin(origin, callback) {
+      // Allow non-browser clients (curl, Postman, Stripe webhooks etc.)
+      if (!origin) return callback(null, true);
+
+      if (allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+
+      console.warn("❌ CORS blocked for origin:", origin);
+      return callback(new Error("Not allowed by CORS"));
+    },
   })
 );
-
 
 // ----- Product -> Price ID map -----
 const PRICE_MAP = {
