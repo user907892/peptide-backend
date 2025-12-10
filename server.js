@@ -6,13 +6,13 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Stripe secret key from Render environment
+// ✅ Stripe secret key from Render environment
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
 // ✅ DEFAULT PRODUCT (Tirzepatide-RUO 10mg)
 const DEFAULT_PRICE_ID = "price_1ScanFBb4lHMkptrVBOBoRdc";
 
-// ✅ CORRECT, LIVE PRICE MAP
+// ✅ YOUR REAL, LIVE PRICE MAP
 const priceInfo = {
   "price_1ScasMBb4lHMkptr4I8lR9wk": { amount: 8000, name: "Semax 10mg" },
   "price_1ScartBb4lHMkptrnPNzWGlE": { amount: 12900, name: "Semaglutide 
@@ -33,7 +33,7 @@ DAC) 5mg" },
 10mg" },
 };
 
-// ✅ SHIPPING RULES
+// ✅ SHIPPING SETTINGS
 const FREE_THRESHOLD = 9900; // $99
 const STANDARD_SHIP = 695;   // $6.95
 
@@ -83,7 +83,7 @@ app.get("/", (req, res) => {
   res.send("✅ Arctic Lab backend is running.");
 });
 
-// ✅ MAIN CHECKOUT ROUTE
+// ✅ CHECKOUT ROUTE
 app.post("/create-checkout-session", async (req, res) => {
   try {
     let normalizedItems = [];
@@ -123,6 +123,7 @@ app.post("/create-checkout-session", async (req, res) => {
   }
 });
 
+// ✅ SERVER START
 const PORT = process.env.PORT || 4242;
 app.listen(PORT, () => {
   console.log("✅ Stripe backend running on port " + PORT);
