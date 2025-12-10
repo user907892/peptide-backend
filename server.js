@@ -4,18 +4,27 @@ dotenv.config();
 const express = require('express');
 const Stripe = require('stripe');
 const cors = require('cors');
+const bodyParser = require('body-parser');
 
 const app = express();
-app.use(express.json());
-app.use(cors({ origin: process.env.ORIGIN || '*' }));
 
+// parse JSON for normal endpoints
+app.use(express.json());
+
+// configure CORS (change ORIGIN in .env to restrict)
+const CORS_ORIGIN = process.env.ORIGIN || '*';
+app.use(cors({ origin: CORS_ORIGIN }));
+
+// Stripe initialization (reads secret from .env)
 if (!process.env.STRIPE_SECRET_KEY) {
   console.warn('⚠️ STRIPE_SECRET_KEY is not set. Set it in your 
 environment.');
 }
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY || '');
 
-// Map your frontend product ids to Stripe Price IDs (provided by you)
+// Server-side mapping from your frontend product ids -> Stripe price_xxx 
+ids
+// (You previously provided these price IDs; keep them as-is for live)
 const PRICE_MAP = {
   "semax-10mg": "price_1ScasMBb4lHMkptr4I8lR9wk",
   "semaglutide-10mg": "price_1ScartBb4lHMkptrnPNzWGlE",
@@ -29,62 +38,146 @@ const PRICE_MAP = {
   "tirzepatide-10mg": "price_1ScanFBb4lHMkptrVBOBoRdc",
 };
 
-app.get('/', (req, res) => {
-  res.send('ArcticLabSupply Stripe backend is running.');
+// simple health-check
+app.get('/', (req, res) => res.send('Stripe backend (cart-based) is up'));
+
+// expose publishable key if frontend wants it
+app.get('/config', (req, res) => {
+  res.json({ publishableKey: process.env.STRIPE_PUBLISHABLE_KEY || '' });
 });
 
+/*
+  create-checkout-session
+  Expects body:
+  {
+    orderId?: string,
+    customer: { name?: string, email: string, phone?: string },
+    items: [
+      // any of these forms are accepted:
+      { price: "price_xxx", quantity: 2 }
+      { priceId: "price_xxx", quantity: 2 }
+      { id: "semaglutide-10mg", qty: 1 } // mapped via PRICE_MAP
+      { id: "semaglutide-10mg", quantity: 1 }
+    ],
+    coupon?: string|null
+  }
+*/
 app.post('/create-checkout-session', async (req, res) => {
   try {
-    const { items } = req.body;
+    const { orderId = '', customer = {}, items = [], coupon = null } = 
+req.body;
+
     console.log('Incoming checkout body:', JSON.stringify(req.body));
 
-    if (!Array.isArray(items) || items.length === 0) {
-      return res.status(400).json({ error: 'No items provided. Cart is 
-empty or invalid.' });
+    if (!customer || !customer.email) {
+      return res.status(400).json({ error: 'Customer email is required' 
+});
     }
 
-    // Build Stripe line_items. Accepts either:
-    // { price: 'price_xxx', quantity } OR { priceId: 'price_xxx', 
-quantity }
-    // OR frontend product id: { id: 'retatrutide-20mg', quantity } which 
-is mapped via PRICE_MAP.
-    const line_items = items.map((item, index) => {
-      const priceId = item.price || item.priceId || (item.id && 
-PRICE_MAP[item.id]);
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ error: 'Cart is empty or invalid' });
+    }
+
+    // Build Stripe line_items: accept price/priceId or map id -> price 
+via PRICE_MAP
+    const line_items = items.map((it, idx) => {
+      const quantity = Number(it.quantity ?? it.qty) > 0 ? 
+Number(it.quantity ?? it.qty) : 1;
+      const priceId = it.price || it.priceId || (it.id && 
+PRICE_MAP[it.id]);
+
       if (!priceId) {
         throw new Error(`Missing price/priceId and unknown product id for 
-item at index ${index}. Item: ${JSON.stringify(item)}`);
+item index ${idx}: ${JSON.stringify(it)}`);
       }
-      const quantity = Number(item.quantity || item.qty) > 0 ? 
-Number(item.quantity || item.qty) : 1;
+
       return { price: priceId, quantity };
     });
 
-    console.log('Creating Stripe session with line_items:', 
-JSON.stringify(line_items));
+    console.log('Resolved line_items:', JSON.stringify(line_items));
 
+    // Create Checkout Session
     const session = await stripe.checkout.sessions.create({
       mode: 'payment',
       line_items,
-      success_url: 
-'https://arcticlabsupply.com/success?session_id={CHECKOUT_SESSION_ID}',
-      cancel_url: 'https://arcticlabsupply.com/cart',
+      customer_email: customer.email,
+      metadata: {
+        order_id: orderId,
+        items: JSON.stringify(items),
+        coupon: coupon || '',
+      },
       billing_address_collection: 'required',
-      shipping_address_collection: { allowed_countries: ['US'] },
+      shipping_address_collection: {
+        allowed_countries: ['US'],
+      },
+      // success/cancel should point to your live frontend origin
+      success_url: (process.env.ORIGIN || 'https://arcticlabsupply.com') + 
+'/success?session_id={CHECKOUT_SESSION_ID}',
+      cancel_url: (process.env.ORIGIN || 'https://arcticlabsupply.com') + 
+'/cart',
       automatic_tax: { enabled: false },
     });
 
     return res.json({ url: session.url });
   } catch (err) {
-    console.error('Stripe error:', err);
-    return res.status(500).json({
-      error: err.message || 'Internal server error creating Stripe 
-session.',
-    });
+    console.error('create-checkout-session error:', err);
+    return res.status(500).json({ error: err.message || 'Internal server 
+error creating session' });
   }
 });
 
+/*
+  Webhook endpoint (optional but recommended)
+  - If STRIPE_WEBHOOK_SECRET is set, the server verifies signatures.
+  - If not set, it will parse the JSON body (dev convenience).
+*/
+app.post('/webhook', bodyParser.raw({ type: 'application/json' }), (req, 
+res) => {
+  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+  const sig = req.headers['stripe-signature'];
+
+  let event;
+
+  try {
+    if (webhookSecret) {
+      event = stripe.webhooks.constructEvent(req.body, sig, 
+webhookSecret);
+    } else {
+      // no secret configured: parse body directly (only for dev; not 
+secure in prod)
+      event = JSON.parse(req.body.toString());
+    }
+  } catch (err) {
+    console.error('Webhook error: signature verification failed or invalid 
+payload', err.message);
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
+
+  // Handle relevant events
+  switch (event.type) {
+    case 'checkout.session.completed': {
+      const session = event.data.object;
+      console.log('Webhook: checkout.session.completed', {
+        id: session.id,
+        metadata: session.metadata,
+      });
+      // TODO: mark order paid in DB using session.metadata.order_id
+      break;
+    }
+    case 'payment_intent.succeeded': {
+      const pi = event.data.object;
+      console.log('Webhook: payment_intent.succeeded', pi.id);
+      break;
+    }
+    default:
+      console.log('Webhook: unhandled event type', event.type);
+  }
+
+  res.json({ received: true });
+});
+
+// start server
 const PORT = Number(process.env.PORT || 4242);
 app.listen(PORT, () => {
-  console.log('Stripe backend running on port ' + PORT);
+  console.log(`Stripe backend listening on http://localhost:${PORT}`);
 });
