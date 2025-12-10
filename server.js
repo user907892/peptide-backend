@@ -1,5 +1,4 @@
 // server.js
-
 require("dotenv").config();
 
 const express = require("express");
@@ -8,47 +7,78 @@ const cors = require("cors");
 
 const app = express();
 
-// ----- Stripe init -----
+// Parse JSON bodies
+app.use(express.json({ limit: "200kb" }));
+
+// Trust proxy (Render sets X-Forwarded-* headers)
+app.set("trust proxy", 1);
+
+// Stripe init
 if (!process.env.STRIPE_SECRET_KEY) {
   console.warn("⚠️ STRIPE_SECRET_KEY is not set. Stripe calls will 
 fail.");
 }
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY || "");
 
-// ----- Frontend URL (where Stripe sends users back) -----
-const FRONTEND_URL =
-  process.env.FRONTEND_URL || "https://arcticlabsupply.com";
+// Frontend URL (where Stripe sends users back)
+const FRONTEND_URL = process.env.FRONTEND_URL || 
+"https://arcticlabsupply.com";
 
-// ----- CORS -----
-/**
- * On Render, set ORIGIN in the env like:
- * 
-https://arcticlabsupply.com,https://arcticlabsupply.netlify.app,http://localhost:5173
- */
-const allowedOrigins =
-  (process.env.ORIGIN && process.env.ORIGIN.split(",")) || [
-    "http://localhost:5173",
-    "https://arcticlabsupply.com",
-    "https://arcticlabsupply.netlify.app",
-  ];
+// Build allowed origins list (comma-separated ORIGIN env supported)
+const defaultOrigins = [
+  "http://localhost:5173",
+  "https://arcticlabsupply.com",
+  "https://arcticlabsupply.netlify.app",
+];
 
-app.use(express.json());
+const allowedOrigins = (() => {
+  if (process.env.ORIGIN) {
+    return process.env.ORIGIN.split(",").map((s) => 
+s.trim()).filter(Boolean);
+  }
+  return defaultOrigins;
+})();
 
+// Always include FRONTEND_URL in the allowed list (avoid accidental 
+lockout)
+if (FRONTEND_URL && !allowedOrigins.includes(FRONTEND_URL)) {
+  allowedOrigins.push(FRONTEND_URL);
+}
+
+console.log("CORS allowed origins:", allowedOrigins);
+
+// CORS middleware: allow non-browser clients (no origin), and only 
+allowed origins otherwise.
+// In non-production (NODE_ENV !== 'production') allow all origins to 
+simplify local debugging.
 app.use(
   cors({
-    origin(origin, callback) {
-      // Allow non-browser clients (curl, Postman, Stripe webhooks etc.)
+    origin: (origin, callback) => {
+      // Allow non-browser requests (curl, Stripe webhooks, 
+server-to-server)
       if (!origin) return callback(null, true);
 
+      // Allow if origin is in allowedOrigins
       if (allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+
+      // In development, be permissive (helpful when testing from varied 
+origins)
+      if (process.env.NODE_ENV !== "production") {
+        console.warn("CORS: allowing dev origin:", origin);
         return callback(null, true);
       }
 
       console.warn("❌ CORS blocked for origin:", origin);
       return callback(new Error("Not allowed by CORS"));
     },
+    optionsSuccessStatus: 200,
   })
 );
+
+// Pre-flight handler for all routes
+app.options("*", cors());
 
 // ----- Product -> Price ID map -----
 const PRICE_MAP = {
@@ -100,12 +130,12 @@ const PRICE_MAP = {
   trizeputide: "price_1ScanFBb4lHMkptrVBOBoRdc",
 };
 
-// ----- Health check -----
+// Health check
 app.get("/", (req, res) => {
   res.send("Stripe backend is up");
 });
 
-// ----- Create Checkout Session -----
+// Create Checkout Session
 app.post("/create-checkout-session", async (req, res) => {
   try {
     const rawItems = Array.isArray(req.body.items) ? req.body.items : [];
@@ -118,11 +148,8 @@ app.post("/create-checkout-session", async (req, res) => {
 
     const line_items = rawItems.map((it, idx) => {
       const qSrc =
-        it.quantity !== undefined
-          ? it.quantity
-          : it.qty !== undefined
-          ? it.qty
-          : 1;
+        it.quantity !== undefined ? it.quantity : it.qty !== undefined ? 
+it.qty : 1;
       const quantity = Number(qSrc) > 0 ? Number(qSrc) : 1;
 
       let priceId = it.price || it.priceId;
@@ -132,7 +159,8 @@ app.post("/create-checkout-session", async (req, res) => {
       }
 
       if (!priceId) {
-        throw new Error("Bad item at index " + idx);
+        throw new Error("Bad item at index " + idx + " : " + 
+JSON.stringify(it));
       }
 
       return { price: priceId, quantity };
@@ -151,16 +179,15 @@ app.post("/create-checkout-session", async (req, res) => {
 
     return res.json({ url: session.url });
   } catch (err) {
-    console.error("checkout error:", err.message);
+    console.error("checkout error:", err && err.stack ? err.stack : err);
     return res.status(500).json({ error: "Server error" });
   }
 });
 
-// ----- Start server (Render uses PORT env) -----
+// Start server
 const PORT = Number(process.env.PORT || 4242);
 app.listen(PORT, () => {
   console.log("Stripe backend listening on port " + PORT);
 });
 
 module.exports = app;
-
