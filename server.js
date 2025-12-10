@@ -8,23 +8,39 @@ const cors = require("cors");
 
 const app = express();
 
-// basic middleware
-app.use(express.json());
-app.use(
-  cors({
-    origin: process.env.ORIGIN || "*", // you can lock this to your domain 
-later
-  })
-);
-
-// Stripe init
+// ----- Stripe init -----
+if (!process.env.STRIPE_SECRET_KEY) {
+  console.warn("⚠️ STRIPE_SECRET_KEY is not set. Stripe calls will 
+fail.");
+}
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY || "");
 
-// Frontend base URL (where Stripe sends users back)
+// ----- Frontend URL (where Stripe sends users back) -----
 const FRONTEND_URL =
   process.env.FRONTEND_URL || "https://arcticlabsupply.com";
 
-// Map frontend product IDs -> Stripe price IDs
+// ----- CORS -----
+/**
+ * On Render, set ORIGIN in the env like:
+ * 
+https://arcticlabsupply.com,https://arcticlabsupply.netlify.app,http://localhost:5173
+ */
+const allowedOrigins =
+  (process.env.ORIGIN && process.env.ORIGIN.split(",")) || [
+    "http://localhost:5173",
+    "https://arcticlabsupply.com",
+    "https://arcticlabsupply.netlify.app",
+  ];
+
+app.use(express.json());
+app.use(
+  cors({
+    origin: process.env.ORIGIN || "*",
+  })
+);
+
+
+// ----- Product -> Price ID map -----
 const PRICE_MAP = {
   // Semax
   "semax-10mg": "price_1ScasMBb4lHMkptr4I8lR9wk",
@@ -74,12 +90,12 @@ const PRICE_MAP = {
   trizeputide: "price_1ScanFBb4lHMkptrVBOBoRdc",
 };
 
-// health check
+// ----- Health check -----
 app.get("/", (req, res) => {
   res.send("Stripe backend is up");
 });
 
-// create checkout session
+// ----- Create Checkout Session -----
 app.post("/create-checkout-session", async (req, res) => {
   try {
     const rawItems = Array.isArray(req.body.items) ? req.body.items : [];
@@ -130,9 +146,11 @@ app.post("/create-checkout-session", async (req, res) => {
   }
 });
 
-// start server
+// ----- Start server (Render uses PORT env) -----
 const PORT = Number(process.env.PORT || 4242);
 app.listen(PORT, () => {
   console.log("Stripe backend listening on port " + PORT);
 });
+
+module.exports = app;
 
