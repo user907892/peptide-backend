@@ -115,16 +115,19 @@ session");
     }
 
     const rawItems = Array.isArray(req.body.items) ? req.body.items : [];
+    const shipping =
+      typeof req.body.shipping === "number" ? req.body.shipping : 0;
 
     console.log("Incoming body:", JSON.stringify(req.body));
+    console.log("Shipping from client:", shipping);
 
     if (rawItems.length === 0) {
       return res.status(400).json({ error: "Cart is empty" });
     }
 
-    // Build line_items with explicit validation instead of throwing
     const line_items = [];
 
+    // build product line items
     for (let idx = 0; idx < rawItems.length; idx++) {
       const it = rawItems[idx];
 
@@ -157,7 +160,21 @@ mapping`,
       line_items.push({ price: priceId, quantity });
     }
 
-    console.log("line_items:", JSON.stringify(line_items));
+    // add shipping as separate line item if > 0
+    if (shipping && shipping > 0) {
+      line_items.push({
+        price_data: {
+          currency: "usd",
+          product_data: {
+            name: "Shipping",
+          },
+          unit_amount: Math.round(shipping * 100), // dollars -> cents
+        },
+        quantity: 1,
+      });
+    }
+
+    console.log("final line_items:", JSON.stringify(line_items));
 
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
