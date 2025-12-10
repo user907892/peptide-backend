@@ -12,12 +12,17 @@ const app = express();
 app.use(express.json());
 app.use(
   cors({
-    origin: process.env.ORIGIN || "*",
+    origin: process.env.ORIGIN || "*", // you can tighten this to your 
+domain later
   })
 );
 
 // Stripe init
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY || "");
+
+// Frontend base URL (where Stripe sends users back)
+const FRONTEND_URL =
+  process.env.FRONTEND_URL || "https://arcticlabsupply.com";
 
 // Map frontend product IDs -> Stripe price IDs
 const PRICE_MAP = {
@@ -87,8 +92,11 @@ app.post("/create-checkout-session", async (req, res) => {
 
     const line_items = rawItems.map((it, idx) => {
       const qSrc =
-        it.quantity !== undefined ? it.quantity : it.qty !== undefined ? 
-it.qty : 1;
+        it.quantity !== undefined
+          ? it.quantity
+          : it.qty !== undefined
+          ? it.qty
+          : 1;
       const quantity = Number(qSrc) > 0 ? Number(qSrc) : 1;
 
       let priceId = it.price || it.priceId;
@@ -106,13 +114,12 @@ it.qty : 1;
 
     console.log("line_items:", JSON.stringify(line_items));
 
-    const origin = process.env.ORIGIN || "https://arcticlabsupply.com";
-
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
       line_items,
-      success_url: origin + "/success?session_id={CHECKOUT_SESSION_ID}",
-      cancel_url: origin + "/cart",
+      success_url: 
+`${FRONTEND_URL}/success?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${FRONTEND_URL}/cart?canceled=1`,
       automatic_tax: { enabled: false },
     });
 
