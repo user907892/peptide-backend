@@ -22,6 +22,7 @@ const FRONTEND_URL =
 // ----- CORS -----
 /**
  * On Render, set ORIGIN in the env like:
+ *
  * 
 https://arcticlabsupply.com,https://arcticlabsupply.netlify.app,http://localhost:5173
  */
@@ -50,7 +51,7 @@ app.use(
   })
 );
 
-// ----- Product -> Price ID map -----
+// ----- Product -> Price ID map (for Stripe) -----
 const PRICE_MAP = {
   // Semax
   "semax-10mg": "price_1ScasMBb4lHMkptr4I8lR9wk",
@@ -100,6 +101,24 @@ const PRICE_MAP = {
   trizeputide: "price_1ScanFBb4lHMkptrVBOBoRdc",
 };
 
+// ----- Product prices in cents (for subtotal & shipping) -----
+const PRODUCT_PRICES = {
+  "semax-10mg": 8000,
+  "semaglutide-10mg": 12900,
+  "cjc-1295-dac-10mg": 13900,
+  "cjc-1295-no-dac-5mg": 7500,
+  "sermorelin-5mg": 7900,
+  "melanotan-ii-10mg": 7500,
+  "bpc-157-5mg": 7900,
+  "bpc-157": 7900,
+  "ghk-cu-50mg": 6000,
+  "ghkcu50mg": 6000,
+  "retatrutide-20mg": 14900,
+  retatrutide: 14900,
+  "tirzepatide-10mg": 9500,
+  trizeputide: 9500,
+};
+
 // ----- Health check -----
 app.get("/", (req, res) => {
   res.send("Stripe backend is up");
@@ -115,19 +134,17 @@ session");
     }
 
     const rawItems = Array.isArray(req.body.items) ? req.body.items : [];
-    const shipping =
-      typeof req.body.shipping === "number" ? req.body.shipping : 0;
 
     console.log("Incoming body:", JSON.stringify(req.body));
-    console.log("Shipping from client:", shipping);
 
     if (rawItems.length === 0) {
       return res.status(400).json({ error: "Cart is empty" });
     }
 
     const line_items = [];
+    let subtotalCents = 0;
 
-    // build product line items
+    // build product line items + subtotal
     for (let idx = 0; idx < rawItems.length; idx++) {
       const it = rawItems[idx];
 
@@ -139,12 +156,11 @@ session");
           : 1;
       const quantity = Number(qSrc) > 0 ? Number(qSrc) : 1;
 
-      // Prefer explicit price from frontend; fall back to PRICE_MAP via 
-id
       let priceId = it.price || it.priceId;
+      const id = it.id;
 
-      if (!priceId && it.id && PRICE_MAP[it.id]) {
-        priceId = PRICE_MAP[it.id];
+      if (!priceId && id && PRICE_MAP[id]) {
+        priceId = PRICE_MAP[id];
       }
 
       if (!priceId) {
@@ -157,18 +173,36 @@ mapping`,
         });
       }
 
+      // accumulate subtotal from PRODUCT_PRICES
+      const unitCents = PRODUCT_PRICES[id] || 0;
+      subtotalCents += unitCents * quantity;
+
       line_items.push({ price: priceId, quantity });
     }
 
-    // add shipping as separate line item if > 0
-    if (shipping && shipping > 0) {
+    // compute shipping from subtotal
+    // rule: $6.95 if subtotal < $99, else free
+    let shippingCents = 0;
+    if (subtotalCents > 0 && subtotalCents < 9900) {
+      shippingCents = 695; // $6.95 in cents
+    }
+
+    console.log(
+      "Subtotal cents:",
+      subtotalCents,
+      "Shipping cents:",
+      shippingCents
+    );
+
+    // add shipping line item if needed
+    if (shippingCents > 0) {
       line_items.push({
         price_data: {
           currency: "usd",
           product_data: {
             name: "Shipping",
           },
-          unit_amount: Math.round(shipping * 100), // dollars -> cents
+          unit_amount: shippingCents,
         },
         quantity: 1,
       });
