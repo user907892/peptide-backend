@@ -6,10 +6,10 @@ const Stripe = require("stripe");
 const app = express();
 
 // ✅ Middleware
-app.use(cors()); // if you want to lock this down later, we can
+app.use(cors());
 app.use(express.json());
 
-// ✅ Stripe secret key (set this in Render / env, DO NOT hardcode)
+// ✅ Stripe secret key (set in Render env as STRIPE_SECRET_KEY)
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
 // Simple healthcheck
@@ -29,8 +29,9 @@ app.get("/", (req, res) => {
  * IMPORTANT:
  * - `id` from the frontend MUST be a Stripe Price ID (e.g. 
 "price_1ScBFW...")
- *   This matches how your cart currently works if your FEATURED ids are 
-price IDs.
+ *   If your ids are something else (like "tirzep10"), we can map them, 
+but
+ *   this version assumes they are already price IDs.
  */
 app.post("/create-checkout-session", async (req, res) => {
   try {
@@ -48,7 +49,7 @@ frontend
       if (!item.id) continue;
 
       line_items.push({
-        price: item.id,                // <-- assumes item.id is a Stripe 
+        price: item.id,                // assumes item.id is a Stripe 
 PRICE ID
         quantity: item.quantity || 1,
       });
