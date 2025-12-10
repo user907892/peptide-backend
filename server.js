@@ -1,4 +1,4 @@
-kconst dotenv = require('dotenv');
+const dotenv = require('dotenv');
 dotenv.config();
 
 const express = require('express');
@@ -22,25 +22,63 @@ environment.');
 }
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY || '');
 
-// Server-side mapping from your frontend product ids -> Stripe price_xxx 
-ids
+// Server-side mapping from possible frontend product ids -> Stripe 
+price_xxx ids
+// Includes common variants/typos so your live frontend ids are accepted 
+without changes.
 const PRICE_MAP = {
+  // Semax
   "semax-10mg": "price_1ScasMBb4lHMkptr4I8lR9wk",
+  "Semax10mg-80": "price_1ScasMBb4lHMkptr4I8lR9wk",
+  "semax10mg": "price_1ScasMBb4lHMkptr4I8lR9wk",
+
+  // Semaglutide
   "semaglutide-10mg": "price_1ScartBb4lHMkptrnPNzWGlE",
+  "Segmaglutide10mg-129": "price_1ScartBb4lHMkptrnPNzWGlE",
+  "semaglutide10mg": "price_1ScartBb4lHMkptrnPNzWGlE",
+
+  // CJC-1295 with DAC
   "cjc-1295-dac-10mg": "price_1ScarOBb4lHMkptrAMf8k9xA",
+  "Cjc-1295withdac-139": "price_1ScarOBb4lHMkptrAMf8k9xA",
+
+  // CJC-1295 no DAC
   "cjc-1295-no-dac-5mg": "price_1ScaqtBb4lHMkptrhqHvm4hg",
+  "Cjc-1295nodac5mg-75": "price_1ScaqtBb4lHMkptrhqHvm4hg",
+
+  // Sermorelin
   "sermorelin-5mg": "price_1ScaqNBb4lHMkptrzUczdGLz",
+  "Sermorelin5mg-79": "price_1ScaqNBb4lHMkptrzUczdGLz",
+
+  // Melanotan II
   "melanotan-ii-10mg": "price_1Scaq2Bb4lHMkptr0tZIa7ze",
+  "Melanotanll10mg-75": "price_1Scaq2Bb4lHMkptr0tZIa7ze",
+  "melanotan10mg": "price_1Scaq2Bb4lHMkptr0tZIa7ze",
+
+  // BPC-157
   "bpc-157-5mg": "price_1ScapUBb4lHMkptrax7jYKP9",
+  "Bpc-157 5mg-79": "price_1ScapUBb4lHMkptrax7jYKP9",
+  "bpc-157": "price_1ScapUBb4lHMkptrax7jYKP9",
+
+  // GHK-Cu
   "ghk-cu-50mg": "price_1ScaoTBb4lHMkptrCL7aXtc7",
+  "Ghk-cu50mg-60": "price_1ScaoTBb4lHMkptrCL7aXtc7",
+  "ghkcu50mg": "price_1ScaoTBb4lHMkptrCL7aXtc7",
+
+  // Retatrutide
   "retatrutide-20mg": "price_1ScanwBb4lHMkptrMgFVPecU",
+  "Retatrutide20mg-149": "price_1ScanwBb4lHMkptrMgFVPecU",
+  "retatrutide": "price_1ScanwBb4lHMkptrMgFVPecU",
+
+  // Tirzepatide
   "tirzepatide-10mg": "price_1ScanFBb4lHMkptrVBOBoRdc",
+  "Trizeputide-ruo10mg-95": "price_1ScanFBb4lHMkptrVBOBoRdc",
+  "trizeputide": "price_1ScanFBb4lHMkptrVBOBoRdc",
 };
 
-// Health-check
+// simple health-check
 app.get('/', (req, res) => res.send('Stripe backend (cart-based) is up'));
 
-// Expose publishable key if frontend needs it
+// expose publishable key if frontend needs it
 app.get('/config', (req, res) => {
   res.json({ publishableKey: process.env.STRIPE_PUBLISHABLE_KEY || '' });
 });
@@ -52,9 +90,9 @@ app.get('/config', (req, res) => {
     orderId?: string,
     customer: { name?: string, email: string, phone?: string },
     items: [
-      { price: "price_xxx", quantity: 2 } OR
-      { priceId: "price_xxx", quantity: 2 } OR
-      { id: "semaglutide-10mg", qty: 1 } // maps via PRICE_MAP
+      { price: "price_xxx", quantity } OR
+      { priceId: "price_xxx", quantity } OR
+      { id: "retatrutide-20mg", qty: 1 } // mapped via PRICE_MAP
     ],
     coupon?: string|null
   }
@@ -75,7 +113,8 @@ req.body;
       return res.status(400).json({ error: 'Cart is empty or invalid' });
     }
 
-    // Build Stripe line_items
+    // Build Stripe line_items (accept price/priceId or map id -> price 
+via PRICE_MAP)
     const line_items = items.map((it, idx) => {
       const quantity = Number(it.quantity ?? it.qty) > 0 ? 
 Number(it.quantity ?? it.qty) : 1;
@@ -132,7 +171,6 @@ res) => {
   const sig = req.headers['stripe-signature'];
 
   let event;
-
   try {
     if (webhookSecret) {
       event = stripe.webhooks.constructEvent(req.body, sig, 
