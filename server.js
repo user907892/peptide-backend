@@ -122,7 +122,12 @@ session");
       return res.status(400).json({ error: "Cart is empty" });
     }
 
-    const line_items = rawItems.map((it, idx) => {
+    // Build line_items with explicit validation instead of throwing
+    const line_items = [];
+
+    for (let idx = 0; idx < rawItems.length; idx++) {
+      const it = rawItems[idx];
+
       const qSrc =
         it.quantity !== undefined
           ? it.quantity
@@ -131,6 +136,8 @@ session");
           : 1;
       const quantity = Number(qSrc) > 0 ? Number(qSrc) : 1;
 
+      // Prefer explicit price from frontend; fall back to PRICE_MAP via 
+id
       let priceId = it.price || it.priceId;
 
       if (!priceId && it.id && PRICE_MAP[it.id]) {
@@ -138,12 +145,17 @@ session");
       }
 
       if (!priceId) {
-        console.error("❌ Bad item at index", idx, "item:", it);
-        throw new Error("Bad item at index " + idx);
+        console.error("❌ Invalid cart item at index", idx, "item:", it);
+        return res.status(400).json({
+          error: "Invalid cart item",
+          message: `Item at index ${idx} is missing a Stripe price 
+mapping`,
+          item: it,
+        });
       }
 
-      return { price: priceId, quantity };
-    });
+      line_items.push({ price: priceId, quantity });
+    }
 
     console.log("line_items:", JSON.stringify(line_items));
 
