@@ -1,4 +1,4 @@
-const dotenv = require('dotenv');
+kconst dotenv = require('dotenv');
 dotenv.config();
 
 const express = require('express');
@@ -24,7 +24,6 @@ const stripe = Stripe(process.env.STRIPE_SECRET_KEY || '');
 
 // Server-side mapping from your frontend product ids -> Stripe price_xxx 
 ids
-// (You previously provided these price IDs; keep them as-is for live)
 const PRICE_MAP = {
   "semax-10mg": "price_1ScasMBb4lHMkptr4I8lR9wk",
   "semaglutide-10mg": "price_1ScartBb4lHMkptrnPNzWGlE",
@@ -38,26 +37,24 @@ const PRICE_MAP = {
   "tirzepatide-10mg": "price_1ScanFBb4lHMkptrVBOBoRdc",
 };
 
-// simple health-check
+// Health-check
 app.get('/', (req, res) => res.send('Stripe backend (cart-based) is up'));
 
-// expose publishable key if frontend wants it
+// Expose publishable key if frontend needs it
 app.get('/config', (req, res) => {
   res.json({ publishableKey: process.env.STRIPE_PUBLISHABLE_KEY || '' });
 });
 
 /*
   create-checkout-session
-  Expects body:
+  Accepts body:
   {
     orderId?: string,
     customer: { name?: string, email: string, phone?: string },
     items: [
-      // any of these forms are accepted:
-      { price: "price_xxx", quantity: 2 }
-      { priceId: "price_xxx", quantity: 2 }
-      { id: "semaglutide-10mg", qty: 1 } // mapped via PRICE_MAP
-      { id: "semaglutide-10mg", quantity: 1 }
+      { price: "price_xxx", quantity: 2 } OR
+      { priceId: "price_xxx", quantity: 2 } OR
+      { id: "semaglutide-10mg", qty: 1 } // maps via PRICE_MAP
     ],
     coupon?: string|null
   }
@@ -78,8 +75,7 @@ req.body;
       return res.status(400).json({ error: 'Cart is empty or invalid' });
     }
 
-    // Build Stripe line_items: accept price/priceId or map id -> price 
-via PRICE_MAP
+    // Build Stripe line_items
     const line_items = items.map((it, idx) => {
       const quantity = Number(it.quantity ?? it.qty) > 0 ? 
 Number(it.quantity ?? it.qty) : 1;
@@ -110,7 +106,6 @@ item index ${idx}: ${JSON.stringify(it)}`);
       shipping_address_collection: {
         allowed_countries: ['US'],
       },
-      // success/cancel should point to your live frontend origin
       success_url: (process.env.ORIGIN || 'https://arcticlabsupply.com') + 
 '/success?session_id={CHECKOUT_SESSION_ID}',
       cancel_url: (process.env.ORIGIN || 'https://arcticlabsupply.com') + 
@@ -127,9 +122,9 @@ error creating session' });
 });
 
 /*
-  Webhook endpoint (optional but recommended)
-  - If STRIPE_WEBHOOK_SECRET is set, the server verifies signatures.
-  - If not set, it will parse the JSON body (dev convenience).
+  Webhook endpoint
+  - If STRIPE_WEBHOOK_SECRET is set the server verifies signatures.
+  - If not set it will parse JSON directly (dev convenience only).
 */
 app.post('/webhook', bodyParser.raw({ type: 'application/json' }), (req, 
 res) => {
@@ -143,8 +138,6 @@ res) => {
       event = stripe.webhooks.constructEvent(req.body, sig, 
 webhookSecret);
     } else {
-      // no secret configured: parse body directly (only for dev; not 
-secure in prod)
       event = JSON.parse(req.body.toString());
     }
   } catch (err) {
@@ -153,14 +146,11 @@ payload', err.message);
     return res.status(400).send(`Webhook Error: ${err.message}`);
   }
 
-  // Handle relevant events
   switch (event.type) {
     case 'checkout.session.completed': {
       const session = event.data.object;
-      console.log('Webhook: checkout.session.completed', {
-        id: session.id,
-        metadata: session.metadata,
-      });
+      console.log('Webhook: checkout.session.completed', { id: session.id, 
+metadata: session.metadata });
       // TODO: mark order paid in DB using session.metadata.order_id
       break;
     }
