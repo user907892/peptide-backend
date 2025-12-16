@@ -14,6 +14,9 @@ app.get("/", (req, res) => {
   res.json({ status: "ok", message: "ArcticLabSupply backend live" });
 });
 
+/**
+ * Create Stripe Checkout Session
+ */
 app.post("/create-checkout-session", async (req, res) => {
   try {
     const { items, shipping } = req.body;
@@ -48,10 +51,11 @@ app.post("/create-checkout-session", async (req, res) => {
       return res.status(400).json({ error: "No valid line items" });
     }
 
-    const session = await Stripe(process.env.STRIPE_SECRET_KEY).checkout.sessions.create({
+    const session = await stripe.checkout.sessions.create({
       mode: "payment",
       line_items,
-      success_url: "https://arcticlabsupply.com/success",
+      success_url: 
+"https://arcticlabsupply.com/success?session_id={CHECKOUT_SESSION_ID}",
       cancel_url: "https://arcticlabsupply.com/cart",
       shipping_address_collection: { allowed_countries: ["US"] },
       phone_number_collection: { enabled: true },
@@ -62,6 +66,34 @@ app.post("/create-checkout-session", async (req, res) => {
   } catch (err) {
     console.error("Error creating checkout session:", err);
     return res.status(500).json({ error: "Failed to create checkout session" });
+
+  }
+});
+
+/**
+ * Retrieve Stripe Checkout Session details
+ */
+app.get("/stripe/session", async (req, res) => {
+  try {
+    const { session_id } = req.query;
+
+    if (!session_id) {
+      return res.status(400).json({ error: "Missing session_id" });
+    }
+
+    const session = await stripe.checkout.sessions.retrieve(session_id, {
+      expand: ["payment_intent"],
+    });
+
+    return res.json({
+      session_id: session.id,
+      transaction_id: session.payment_intent?.id || session.id,
+      value: (session.amount_total || 0) / 100,
+      currency: (session.currency || "usd").toUpperCase(),
+    });
+  } catch (err) {
+    console.error("Error retrieving session:", err);
+    return res.status(500).json({ error: "Failed to retrieve session" });
   }
 });
 
@@ -69,3 +101,4 @@ const PORT = process.env.PORT || 4242;
 app.listen(PORT, () => {
   console.log(`ArcticLabSupply backend listening on port ${PORT}`);
 });
+
