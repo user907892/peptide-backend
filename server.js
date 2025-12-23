@@ -5,10 +5,25 @@ const Stripe = require("stripe");
 
 const app = express();
 
-app.use(cors());
+// ✅ CORS (you can keep app.use(cors()) if you want it open)
+// This version allows your site + localhost
+app.use(
+  cors({
+    origin: [
+      "https://arcticlabsupply.com",
+      "https://www.arcticlabsupply.com",
+      "http://localhost:5173",
+      "http://localhost:3000",
+    ],
+    methods: ["GET", "POST", "OPTIONS"],
+  })
+);
+
 app.use(express.json());
 
-const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
+// ✅ IMPORTANT: Render must have STRIPE_SECRET_KEY set (sk_live_...)
+// If this is missing/wrong, /stripe/session will fail.
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
 app.get("/", (req, res) => {
   res.json({ status: "ok", message: "ArcticLabSupply backend live" });
@@ -54,7 +69,8 @@ app.post("/create-checkout-session", async (req, res) => {
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
       line_items,
-      success_url: 
+      success_url:
+        
 "https://arcticlabsupply.com/success?session_id={CHECKOUT_SESSION_ID}",
       cancel_url: "https://arcticlabsupply.com/cart",
       shipping_address_collection: { allowed_countries: ["US"] },
@@ -64,14 +80,18 @@ app.post("/create-checkout-session", async (req, res) => {
 
     return res.json({ url: session.url });
   } catch (err) {
-    console.error("Error creating checkout session:", err);
-    return res.status(500).json({ error: "Failed to create checkout session" });
-
+    console.error("Error creating checkout session:", err?.message || 
+err);
+    return res.status(500).json({
+      error: "Failed to create checkout session",
+      message: err?.message || "unknown error",
+    });
   }
 });
 
 /**
- * Retrieve Stripe Checkout Session details
+ * Retrieve Stripe Checkout Session details (FIXED)
+ * Returns value + currency + items[] for GA4 purchase event.
  */
 app.get("/stripe/session", async (req, res) => {
   try {
@@ -82,18 +102,48 @@ app.get("/stripe/session", async (req, res) => {
     }
 
     const session = await stripe.checkout.sessions.retrieve(session_id, {
-      expand: ["payment_intent"],
+      expand: ["payment_intent", "line_items.data.price.product"],
     });
+
+    const transaction_id =
+      (typeof session.payment_intent === "string"
+        ? session.payment_intent
+        : session.payment_intent?.id) || session.id;
+
+    const value = (session.amount_total || 0) / 100;
+    const currency = (session.currency || "usd").toUpperCase();
+
+    const items =
+      session.line_items?.data?.map((li) => {
+        const price = li.price;
+        const product = price?.product;
+
+        return {
+          item_id:
+            (typeof product === "object" && product?.id) || price?.id || 
+"unknown",
+          item_name:
+            (typeof product === "object" && product?.name) ||
+            li.description ||
+            "Item",
+          price: (price?.unit_amount || 0) / 100,
+          quantity: li.quantity || 1,
+        };
+      }) || [];
 
     return res.json({
       session_id: session.id,
-      transaction_id: session.payment_intent?.id || session.id,
-      value: (session.amount_total || 0) / 100,
-      currency: (session.currency || "usd").toUpperCase(),
+      transaction_id,
+      value,
+      currency,
+      items,
     });
   } catch (err) {
-    console.error("Error retrieving session:", err);
-    return res.status(500).json({ error: "Failed to retrieve session" });
+    console.error("Error retrieving session:", err?.message || err);
+    return res.status(500).json({
+      error: "Failed to retrieve session",
+      message: err?.message || "unknown error",
+    });
   }
 });
 
