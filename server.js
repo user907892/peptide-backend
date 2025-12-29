@@ -1,13 +1,10 @@
-// server.js
-// ArcticLabSupply backend (Render) — Stripe Checkout + coupon support
-
+cat > server.js <<'EOF'
 const express = require("express");
 const cors = require("cors");
 const Stripe = require("stripe");
 
 const app = express();
 
-// ✅ CORS (site + localhost)
 const corsOptions = {
   origin: [
     "https://arcticlabsupply.com",
@@ -18,15 +15,10 @@ const corsOptions = {
   methods: ["GET", "POST", "OPTIONS"],
 };
 
-// Apply CORS + handle preflight explicitly (helps on some hosts)
 app.use(cors(corsOptions));
 app.options("*", cors(corsOptions));
-
 app.use(express.json());
 
-// ✅ Don't crash the server if the key is missing.
-// Render deploy will succeed, and Stripe endpoints will return a helpful 
-error.
 let stripe = null;
 if (!process.env.STRIPE_SECRET_KEY) {
   console.warn("⚠️ Missing STRIPE_SECRET_KEY in environment variables.");
@@ -34,9 +26,6 @@ if (!process.env.STRIPE_SECRET_KEY) {
   stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 }
 
-/**
- * ✅ Coupon Code Map (YOUR codes -> Stripe Coupon IDs)
- */
 const COUPON_MAP = {
   // SAVE15: "coupon_XXXXXXXXXXXX",
   // WELCOME10: "coupon_YYYYYYYYYYYY",
@@ -50,9 +39,6 @@ app.get("/", (req, res) => {
   res.json({ status: "ok", message: "ArcticLabSupply backend live" });
 });
 
-/**
- * Create Stripe Checkout Session
- */
 app.post("/create-checkout-session", async (req, res) => {
   try {
     if (!stripe) {
@@ -79,7 +65,6 @@ app.post("/create-checkout-session", async (req, res) => {
       });
     }
 
-    // Optional shipping as its own line item
     if (typeof shipping === "number" && shipping > 0) {
       line_items.push({
         price_data: {
@@ -95,7 +80,6 @@ app.post("/create-checkout-session", async (req, res) => {
       return res.status(400).json({ error: "No valid line items" });
     }
 
-    // ✅ Apply discount server-side
     const normalizedCoupon = normalizeCoupon(coupon);
 
     let discounts;
@@ -137,10 +121,6 @@ err);
   }
 });
 
-/**
- * Retrieve Stripe Checkout Session details (for GA4 purchase event)
- * GET /stripe/session?session_id=cs_test_...
- */
 app.get("/stripe/session", async (req, res) => {
   try {
     if (!stripe) {
@@ -208,4 +188,5 @@ const PORT = process.env.PORT || 4242;
 app.listen(PORT, () => {
   console.log(`ArcticLabSupply backend listening on port ${PORT}`);
 });
+EOF
 
