@@ -1,10 +1,5 @@
 // server.js
 // ArcticLabSupply backend (Render) — Stripe Checkout + coupon support
-// ✅ Creates Stripe Checkout Sessions from Price IDs
-// ✅ Optionally adds Shipping as a line item
-// ✅ Applies a discount code SERVER-SIDE (so it works on backend, not 
-just UI)
-// ✅ Returns /stripe/session details for GA4 purchase event
 
 const express = require("express");
 const cors = require("cors");
@@ -13,34 +8,34 @@ const Stripe = require("stripe");
 const app = express();
 
 // ✅ CORS (site + localhost)
-app.use(
-  cors({
-    origin: [
-      "https://arcticlabsupply.com",
-      "https://www.arcticlabsupply.com",
-      "http://localhost:5173",
-      "http://localhost:3000",
-    ],
-    methods: ["GET", "POST", "OPTIONS"],
-  })
-);
+const corsOptions = {
+  origin: [
+    "https://arcticlabsupply.com",
+    "https://www.arcticlabsupply.com",
+    "http://localhost:5173",
+    "http://localhost:3000",
+  ],
+  methods: ["GET", "POST", "OPTIONS"],
+};
+
+// Apply CORS + handle preflight explicitly (helps on some hosts)
+app.use(cors(corsOptions));
+app.options("*", cors(corsOptions));
 
 app.use(express.json());
 
-// ✅ IMPORTANT: Render must have STRIPE_SECRET_KEY set (sk_live_... or 
-sk_test_...)
+// ✅ Don't crash the server if the key is missing.
+// Render deploy will succeed, and Stripe endpoints will return a helpful 
+error.
+let stripe = null;
 if (!process.env.STRIPE_SECRET_KEY) {
   console.warn("⚠️ Missing STRIPE_SECRET_KEY in environment variables.");
+} else {
+  stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 }
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
 /**
  * ✅ Coupon Code Map (YOUR codes -> Stripe Coupon IDs)
- *
- * IMPORTANT:
- * 1) Create the coupons in Stripe Dashboard (Coupons)
- * 2) Copy the coupon IDs (coupon_XXXX...)
- * 3) Paste them here
  */
 const COUPON_MAP = {
   // SAVE15: "coupon_XXXXXXXXXXXX",
@@ -57,16 +52,16 @@ app.get("/", (req, res) => {
 
 /**
  * Create Stripe Checkout Session
- *
- * Frontend should send:
- * {
- *   items: [{ id: "price_...", quantity: 1 }, ...],
- *   shipping: 0 or 9.95,
- *   coupon: "SAVE15" (optional)
- * }
  */
 app.post("/create-checkout-session", async (req, res) => {
   try {
+    if (!stripe) {
+      return res.status(500).json({
+        error: "Stripe is not configured on the server",
+        message: "Missing STRIPE_SECRET_KEY",
+      });
+    }
+
     const { items, shipping, coupon } = req.body;
 
     if (!Array.isArray(items) || items.length === 0) {
@@ -85,8 +80,6 @@ app.post("/create-checkout-session", async (req, res) => {
     }
 
     // Optional shipping as its own line item
-    // NOTE: Coupons in Stripe may discount shipping depending on coupon 
-settings.
     if (typeof shipping === "number" && shipping > 0) {
       line_items.push({
         price_data: {
@@ -150,6 +143,13 @@ err);
  */
 app.get("/stripe/session", async (req, res) => {
   try {
+    if (!stripe) {
+      return res.status(500).json({
+        error: "Stripe is not configured on the server",
+        message: "Missing STRIPE_SECRET_KEY",
+      });
+    }
+
     const { session_id } = req.query;
 
     if (!session_id) {
