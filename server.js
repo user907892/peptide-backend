@@ -1,12 +1,10 @@
-k// server.js
+// server.js
 // ArcticLabSupply backend (Render) — Stripe Checkout + coupon support
-// ✅ What this does:
-// - Creates Stripe Checkout Sessions from Price IDs you send from 
-frontend
-// - Optionally adds a Shipping line item
-// - ✅ Applies a discount code SERVER-SIDE (so it works on backend, not 
-
-// - Returns /stripe/session details for GA4 purchase event
+// ✅ Creates Stripe Checkout Sessions from Price IDs
+// ✅ Optionally adds Shipping as a line item
+// ✅ Applies a discount code SERVER-SIDE (so it works on backend, not 
+just UI)
+// ✅ Returns /stripe/session details for GA4 purchase event
 
 const express = require("express");
 const cors = require("cors");
@@ -14,10 +12,7 @@ const Stripe = require("stripe");
 
 const app = express();
 
-/**
- * ✅ CORS
- * Add any other domains you use (staging, preview) to this list.
- */
+// ✅ CORS (site + localhost)
 app.use(
   cors({
     origin: [
@@ -32,10 +27,8 @@ app.use(
 
 app.use(express.json());
 
-/**
- * ✅ STRIPE_SECRET_KEY must be set in Render env vars
- * Example: sk_live_...
- */
+// ✅ IMPORTANT: Render must have STRIPE_SECRET_KEY set (sk_live_... or 
+sk_test_...)
 if (!process.env.STRIPE_SECRET_KEY) {
   console.warn("⚠️ Missing STRIPE_SECRET_KEY in environment variables.");
 }
@@ -45,21 +38,15 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
  * ✅ Coupon Code Map (YOUR codes -> Stripe Coupon IDs)
  *
  * IMPORTANT:
- * 1) Create the coupons in Stripe Dashboard first (Coupons)
+ * 1) Create the coupons in Stripe Dashboard (Coupons)
  * 2) Copy the coupon IDs (coupon_XXXX...)
  * 3) Paste them here
- *
- * If you prefer Promotion Codes instead, ask and I'll adjust.
  */
 const COUPON_MAP = {
-  // Example:
-  // SAVE15: "coupon_ABC123",       // $15 off
-  // WELCOME10: "coupon_DEF456",    // 10% off
+  // SAVE15: "coupon_XXXXXXXXXXXX",
+  // WELCOME10: "coupon_YYYYYYYYYYYY",
 };
 
-/**
- * Normalize coupon input
- */
 function normalizeCoupon(code) {
   return String(code || "").trim().toUpperCase();
 }
@@ -86,10 +73,11 @@ app.post("/create-checkout-session", async (req, res) => {
       return res.status(400).json({ error: "No items provided" });
     }
 
-    // Build Stripe line items from Price IDs
     const line_items = [];
+
     for (const item of items) {
       if (!item || !item.id) continue;
+
       line_items.push({
         price: item.id,
         quantity: Number(item.quantity) > 0 ? Number(item.quantity) : 1,
@@ -114,19 +102,15 @@ settings.
       return res.status(400).json({ error: "No valid line items" });
     }
 
-    // ✅ Apply discount server-side (so backend reflects it)
+    // ✅ Apply discount server-side
     const normalizedCoupon = normalizeCoupon(coupon);
 
-    // Stripe "discounts" accepts coupon IDs:
-    // discounts: [{ coupon: "coupon_..." }]
     let discounts;
     if (normalizedCoupon) {
       const stripeCouponId = COUPON_MAP[normalizedCoupon];
-
       if (!stripeCouponId) {
         return res.status(400).json({ error: "Invalid coupon code" });
       }
-
       discounts = [{ coupon: stripeCouponId }];
     }
 
@@ -162,8 +146,6 @@ err);
 
 /**
  * Retrieve Stripe Checkout Session details (for GA4 purchase event)
- * Returns value + currency + items[].
- *
  * GET /stripe/session?session_id=cs_test_...
  */
 app.get("/stripe/session", async (req, res) => {
