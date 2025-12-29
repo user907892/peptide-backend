@@ -1,6 +1,5 @@
 // server.js
 // ArcticLabSupply backend (Render) — Stripe Checkout + Promotion Codes 
-(SAVE10 / TAKE10)
 
 const express = require("express");
 const cors = require("cors");
