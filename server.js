@@ -1,3 +1,6 @@
+// server.js
+// ArcticLabSupply backend (Render) — Stripe Checkout + Promotion Codes 
+(SAVE10 / TAKE10)
 
 const express = require("express");
 const cors = require("cors");
@@ -5,6 +8,7 @@ const Stripe = require("stripe");
 
 const app = express();
 
+// ✅ CORS (site + localhost)
 const corsOptions = {
   origin: [
     "https://arcticlabsupply.com",
@@ -19,17 +23,13 @@ app.use(cors(corsOptions));
 app.options("*", cors(corsOptions));
 app.use(express.json());
 
+// ✅ Don't crash server if STRIPE_SECRET_KEY missing
 let stripe = null;
 if (!process.env.STRIPE_SECRET_KEY) {
   console.warn("⚠️ Missing STRIPE_SECRET_KEY in environment variables.");
 } else {
   stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 }
-
-const COUPON_MAP = {
-  // SAVE15: "coupon_XXXXXXXXXXXX",
-  // WELCOME10: "coupon_YYYYYYYYYYYY",
-};
 
 function normalizeCoupon(code) {
   return String(code || "").trim().toUpperCase();
@@ -39,6 +39,10 @@ app.get("/", (req, res) => {
   res.json({ status: "ok", message: "ArcticLabSupply backend live" });
 });
 
+/**
+ * Create Stripe Checkout Session
+ * Accepts customer-facing Stripe Promotion Codes (e.g., SAVE10, TAKE10)
+ */
 app.post("/create-checkout-session", async (req, res) => {
   try {
     if (!stripe) {
@@ -65,6 +69,7 @@ app.post("/create-checkout-session", async (req, res) => {
       });
     }
 
+    // Optional shipping as its own line item
     if (typeof shipping === "number" && shipping > 0) {
       line_items.push({
         price_data: {
@@ -80,15 +85,25 @@ app.post("/create-checkout-session", async (req, res) => {
       return res.status(400).json({ error: "No valid line items" });
     }
 
+    // ✅ Promotion code lookup by customer-entered code (SAVE10 / TAKE10)
     const normalizedCoupon = normalizeCoupon(coupon);
 
     let discounts;
+    let appliedPromotionCodeId = null;
+
     if (normalizedCoupon) {
-      const stripeCouponId = COUPON_MAP[normalizedCoupon];
-      if (!stripeCouponId) {
+      const promos = await stripe.promotionCodes.list({
+        code: normalizedCoupon,
+        active: true,
+        limit: 1,
+      });
+
+      if (!promos.data.length) {
         return res.status(400).json({ error: "Invalid coupon code" });
       }
-      discounts = [{ coupon: stripeCouponId }];
+
+      appliedPromotionCodeId = promos.data[0].id;
+      discounts = [{ promotion_code: appliedPromotionCodeId }];
     }
 
     const session = await stripe.checkout.sessions.create({
@@ -104,9 +119,11 @@ app.post("/create-checkout-session", async (req, res) => {
       shipping_address_collection: { allowed_countries: ["US"] },
       phone_number_collection: { enabled: true },
 
+      // Helpful for tracking which code was used
       metadata: {
         source: "arcticlabsupply-cart",
-        coupon: normalizedCoupon || "",
+        coupon_code: normalizedCoupon || "",
+        promotion_code_id: appliedPromotionCodeId || "",
       },
     });
 
@@ -121,6 +138,10 @@ err);
   }
 });
 
+/**
+ * Retrieve Stripe Checkout Session details (for GA4 purchase event)
+ * GET /stripe/session?session_id=cs_test_...
+ */
 app.get("/stripe/session", async (req, res) => {
   try {
     if (!stripe) {
@@ -173,7 +194,8 @@ app.get("/stripe/session", async (req, res) => {
       value,
       currency,
       items,
-      coupon: session.metadata?.coupon || "",
+      coupon_code: session.metadata?.coupon_code || "",
+      promotion_code_id: session.metadata?.promotion_code_id || "",
     });
   } catch (err) {
     console.error("Error retrieving session:", err?.message || err);
