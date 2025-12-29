@@ -188,5 +188,4 @@ const PORT = process.env.PORT || 4242;
 app.listen(PORT, () => {
   console.log(`ArcticLabSupply backend listening on port ${PORT}`);
 });
-EOF
 
