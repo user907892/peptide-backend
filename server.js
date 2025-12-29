@@ -1,12 +1,23 @@
-// server.js
+k// server.js
+// ArcticLabSupply backend (Render) — Stripe Checkout + coupon support
+// ✅ What this does:
+// - Creates Stripe Checkout Sessions from Price IDs you send from 
+frontend
+// - Optionally adds a Shipping line item
+// - ✅ Applies a discount code SERVER-SIDE (so it works on backend, not 
+just UI)
+// - Returns /stripe/session details for GA4 purchase event
+
 const express = require("express");
 const cors = require("cors");
 const Stripe = require("stripe");
 
 const app = express();
 
-// ✅ CORS (you can keep app.use(cors()) if you want it open)
-// This version allows your site + localhost
+/**
+ * ✅ CORS
+ * Add any other domains you use (staging, preview) to this list.
+ */
 app.use(
   cors({
     origin: [
@@ -21,9 +32,37 @@ app.use(
 
 app.use(express.json());
 
-// ✅ IMPORTANT: Render must have STRIPE_SECRET_KEY set (sk_live_...)
-// If this is missing/wrong, /stripe/session will fail.
+/**
+ * ✅ STRIPE_SECRET_KEY must be set in Render env vars
+ * Example: sk_live_...
+ */
+if (!process.env.STRIPE_SECRET_KEY) {
+  console.warn("⚠️ Missing STRIPE_SECRET_KEY in environment variables.");
+}
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+
+/**
+ * ✅ Coupon Code Map (YOUR codes -> Stripe Coupon IDs)
+ *
+ * IMPORTANT:
+ * 1) Create the coupons in Stripe Dashboard first (Coupons)
+ * 2) Copy the coupon IDs (coupon_XXXX...)
+ * 3) Paste them here
+ *
+ * If you prefer Promotion Codes instead, ask and I'll adjust.
+ */
+const COUPON_MAP = {
+  // Example:
+  // SAVE15: "coupon_ABC123",       // $15 off
+  // WELCOME10: "coupon_DEF456",    // 10% off
+};
+
+/**
+ * Normalize coupon input
+ */
+function normalizeCoupon(code) {
+  return String(code || "").trim().toUpperCase();
+}
 
 app.get("/", (req, res) => {
   res.json({ status: "ok", message: "ArcticLabSupply backend live" });
@@ -31,26 +70,35 @@ app.get("/", (req, res) => {
 
 /**
  * Create Stripe Checkout Session
+ *
+ * Frontend should send:
+ * {
+ *   items: [{ id: "price_...", quantity: 1 }, ...],
+ *   shipping: 0 or 9.95,
+ *   coupon: "SAVE15" (optional)
+ * }
  */
 app.post("/create-checkout-session", async (req, res) => {
   try {
-    const { items, shipping } = req.body;
+    const { items, shipping, coupon } = req.body;
 
     if (!Array.isArray(items) || items.length === 0) {
       return res.status(400).json({ error: "No items provided" });
     }
 
+    // Build Stripe line items from Price IDs
     const line_items = [];
-
     for (const item of items) {
-      if (!item.id) continue;
-
+      if (!item || !item.id) continue;
       line_items.push({
         price: item.id,
-        quantity: item.quantity || 1,
+        quantity: Number(item.quantity) > 0 ? Number(item.quantity) : 1,
       });
     }
 
+    // Optional shipping as its own line item
+    // NOTE: Coupons in Stripe may discount shipping depending on coupon 
+settings.
     if (typeof shipping === "number" && shipping > 0) {
       line_items.push({
         price_data: {
@@ -66,16 +114,39 @@ app.post("/create-checkout-session", async (req, res) => {
       return res.status(400).json({ error: "No valid line items" });
     }
 
+    // ✅ Apply discount server-side (so backend reflects it)
+    const normalizedCoupon = normalizeCoupon(coupon);
+
+    // Stripe "discounts" accepts coupon IDs:
+    // discounts: [{ coupon: "coupon_..." }]
+    let discounts;
+    if (normalizedCoupon) {
+      const stripeCouponId = COUPON_MAP[normalizedCoupon];
+
+      if (!stripeCouponId) {
+        return res.status(400).json({ error: "Invalid coupon code" });
+      }
+
+      discounts = [{ coupon: stripeCouponId }];
+    }
+
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
       line_items,
+      discounts: discounts || undefined,
+
       success_url:
         
 "https://arcticlabsupply.com/success?session_id={CHECKOUT_SESSION_ID}",
       cancel_url: "https://arcticlabsupply.com/cart",
+
       shipping_address_collection: { allowed_countries: ["US"] },
       phone_number_collection: { enabled: true },
-      metadata: { source: "arcticlabsupply-cart" },
+
+      metadata: {
+        source: "arcticlabsupply-cart",
+        coupon: normalizedCoupon || "",
+      },
     });
 
     return res.json({ url: session.url });
@@ -90,8 +161,10 @@ err);
 });
 
 /**
- * Retrieve Stripe Checkout Session details (FIXED)
- * Returns value + currency + items[] for GA4 purchase event.
+ * Retrieve Stripe Checkout Session details (for GA4 purchase event)
+ * Returns value + currency + items[].
+ *
+ * GET /stripe/session?session_id=cs_test_...
  */
 app.get("/stripe/session", async (req, res) => {
   try {
@@ -120,8 +193,9 @@ app.get("/stripe/session", async (req, res) => {
 
         return {
           item_id:
-            (typeof product === "object" && product?.id) || price?.id || 
-"unknown",
+            (typeof product === "object" && product?.id) ||
+            price?.id ||
+            "unknown",
           item_name:
             (typeof product === "object" && product?.name) ||
             li.description ||
@@ -137,6 +211,7 @@ app.get("/stripe/session", async (req, res) => {
       value,
       currency,
       items,
+      coupon: session.metadata?.coupon || "",
     });
   } catch (err) {
     console.error("Error retrieving session:", err?.message || err);
