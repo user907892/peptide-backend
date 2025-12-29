@@ -5,7 +5,7 @@ k// server.js
 frontend
 // - Optionally adds a Shipping line item
 // - ✅ Applies a discount code SERVER-SIDE (so it works on backend, not 
-just UI)
+
 // - Returns /stripe/session details for GA4 purchase event
 
 const express = require("express");
