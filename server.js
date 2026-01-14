@@ -1,4 +1,4 @@
-// server.js
+k// server.js
 // ArcticLabSupply backend (Render) — Stripe Checkout + Promotion Codes + 
 PayPal Orders API
 
@@ -24,7 +24,7 @@ app.options("*", cors(corsOptions));
 app.use(express.json());
 
 // =====================
-// Stripe (keep; will not crash if missing)
+// Stripe (kept; will not crash if missing)
 // =====================
 let stripe = null;
 if (!process.env.STRIPE_SECRET_KEY) {
@@ -75,6 +75,9 @@ async function getPayPalAccessToken() {
   return data.access_token;
 }
 
+// =====================
+// Health
+// =====================
 app.get("/", (req, res) => {
   res.json({ status: "ok", message: "ArcticLabSupply backend live" });
 });
@@ -132,13 +135,15 @@ app.post("/paypal/create-order", async (req, res) => {
     const data = await ppResp.json();
     if (!ppResp.ok) {
       console.error("PayPal create-order error:", data);
-      return res
-        .status(500)
-        .json({ error: "Create order failed", details: data });
+      return res.status(500).json({
+        error: "Create order failed",
+        details: data,
+      });
     }
 
     const approveUrl = (data.links || []).find((l) => l.rel === 
 "approve")?.href;
+
     return res.json({ orderID: data.id, approveUrl });
   } catch (err) {
     console.error("PayPal create-order server error:", err);
@@ -152,8 +157,10 @@ app.post("/paypal/create-order", async (req, res) => {
 app.post("/paypal/capture-order", async (req, res) => {
   try {
     const { orderID } = req.body;
-    if (!orderID) return res.status(400).json({ error: "Missing orderID" 
-});
+
+    if (!orderID) {
+      return res.status(400).json({ error: "Missing orderID" });
+    }
 
     const accessToken = await getPayPalAccessToken();
 
@@ -171,8 +178,10 @@ app.post("/paypal/capture-order", async (req, res) => {
     const data = await ppResp.json();
     if (!ppResp.ok) {
       console.error("PayPal capture error:", data);
-      return res.status(500).json({ error: "Capture failed", details: data 
-});
+      return res.status(500).json({
+        error: "Capture failed",
+        details: data,
+      });
     }
 
     return res.json(data);
@@ -211,6 +220,7 @@ app.post("/create-checkout-session", async (req, res) => {
       });
     }
 
+    // Optional shipping as its own line item
     if (typeof shipping === "number" && shipping > 0) {
       line_items.push({
         price_data: {
@@ -226,6 +236,7 @@ app.post("/create-checkout-session", async (req, res) => {
       return res.status(400).json({ error: "No valid line items" });
     }
 
+    // ✅ Promotion code lookup by customer-entered code (SAVE10 / TAKE10)
     const normalizedCoupon = normalizeCoupon(coupon);
 
     let discounts;
@@ -250,12 +261,14 @@ app.post("/create-checkout-session", async (req, res) => {
       mode: "payment",
       line_items,
       discounts: discounts || undefined,
-      success_url:
-        
+
+      success_url: 
 "https://arcticlabsupply.com/success?session_id={CHECKOUT_SESSION_ID}",
       cancel_url: "https://arcticlabsupply.com/cart",
+
       shipping_address_collection: { allowed_countries: ["US"] },
       phone_number_collection: { enabled: true },
+
       metadata: {
         source: "arcticlabsupply-cart",
         coupon_code: normalizedCoupon || "",
@@ -274,7 +287,9 @@ err);
   }
 });
 
+// =====================
 // Stripe session endpoint (kept)
+// =====================
 app.get("/stripe/session", async (req, res) => {
   try {
     if (!stripe) {
@@ -285,8 +300,9 @@ app.get("/stripe/session", async (req, res) => {
     }
 
     const { session_id } = req.query;
-    if (!session_id) return res.status(400).json({ error: "Missing 
-session_id" });
+    if (!session_id) {
+      return res.status(400).json({ error: "Missing session_id" });
+    }
 
     const session = await stripe.checkout.sessions.retrieve(session_id, {
       expand: ["payment_intent", "line_items.data.price.product"],
@@ -339,4 +355,3 @@ const PORT = process.env.PORT || 4242;
 app.listen(PORT, () => {
   console.log(`ArcticLabSupply backend listening on port ${PORT}`);
 });
-
