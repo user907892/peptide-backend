@@ -1,5 +1,6 @@
 // server.js
-// ArcticLabSupply backend (Render) — Stripe Checkout + Promotion Codes 
+// ArcticLabSupply backend (Render) — Stripe Checkout + Promotion Codes + 
+PayPal Orders API
 
 const express = require("express");
 const cors = require("cors");
@@ -22,7 +23,9 @@ app.use(cors(corsOptions));
 app.options("*", cors(corsOptions));
 app.use(express.json());
 
-// ✅ Don't crash server if STRIPE_SECRET_KEY missing
+// =====================
+// Stripe (keep; will not crash if missing)
+// =====================
 let stripe = null;
 if (!process.env.STRIPE_SECRET_KEY) {
   console.warn("⚠️ Missing STRIPE_SECRET_KEY in environment variables.");
@@ -34,14 +37,154 @@ function normalizeCoupon(code) {
   return String(code || "").trim().toUpperCase();
 }
 
+// =====================
+// PayPal Orders API config
+// =====================
+const PAYPAL_CLIENT_ID = process.env.PAYPAL_CLIENT_ID;
+const PAYPAL_CLIENT_SECRET = process.env.PAYPAL_CLIENT_SECRET;
+const PAYPAL_ENV = (process.env.PAYPAL_ENV || "sandbox").toLowerCase();
+
+const PAYPAL_BASE =
+  PAYPAL_ENV === "live"
+    ? "https://api-m.paypal.com"
+    : "https://api-m.sandbox.paypal.com";
+
+async function getPayPalAccessToken() {
+  if (!PAYPAL_CLIENT_ID || !PAYPAL_CLIENT_SECRET) {
+    throw new Error("Missing PAYPAL_CLIENT_ID or PAYPAL_CLIENT_SECRET");
+  }
+
+  const auth = Buffer.from(
+    `${PAYPAL_CLIENT_ID}:${PAYPAL_CLIENT_SECRET}`
+  ).toString("base64");
+
+  const resp = await fetch(`${PAYPAL_BASE}/v1/oauth2/token`, {
+    method: "POST",
+    headers: {
+      Authorization: `Basic ${auth}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: "grant_type=client_credentials",
+  });
+
+  const data = await resp.json();
+  if (!resp.ok) {
+    console.error("PayPal token error:", data);
+    throw new Error(data?.error_description || "PayPal token error");
+  }
+  return data.access_token;
+}
+
 app.get("/", (req, res) => {
   res.json({ status: "ok", message: "ArcticLabSupply backend live" });
 });
 
-/**
- * Create Stripe Checkout Session
- * Accepts customer-facing Stripe Promotion Codes (e.g., SAVE10, TAKE10)
- */
+// =====================
+// PayPal: Create Order -> approveUrl
+// =====================
+app.post("/paypal/create-order", async (req, res) => {
+  try {
+    const { total, currency = "USD", returnUrl, cancelUrl } = req.body;
+
+    if (!PAYPAL_CLIENT_ID || !PAYPAL_CLIENT_SECRET) {
+      return res.status(500).json({
+        error: "PayPal not configured",
+        message: "Missing PAYPAL_CLIENT_ID / PAYPAL_CLIENT_SECRET",
+      });
+    }
+
+    const value = Number(total);
+    if (!Number.isFinite(value) || value <= 0) {
+      return res.status(400).json({ error: "Invalid total" });
+    }
+    if (!returnUrl || !cancelUrl) {
+      return res.status(400).json({ error: "Missing returnUrl/cancelUrl" 
+});
+    }
+
+    const accessToken = await getPayPalAccessToken();
+
+    const payload = {
+      intent: "CAPTURE",
+      purchase_units: [
+        {
+          amount: { currency_code: currency, value: value.toFixed(2) },
+          description: "Laboratory research materials",
+        },
+      ],
+      application_context: {
+        brand_name: "Arctic Labs Supply",
+        user_action: "PAY_NOW",
+        return_url: returnUrl,
+        cancel_url: cancelUrl,
+      },
+    };
+
+    const ppResp = await fetch(`${PAYPAL_BASE}/v2/checkout/orders`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+
+    const data = await ppResp.json();
+    if (!ppResp.ok) {
+      console.error("PayPal create-order error:", data);
+      return res
+        .status(500)
+        .json({ error: "Create order failed", details: data });
+    }
+
+    const approveUrl = (data.links || []).find((l) => l.rel === 
+"approve")?.href;
+    return res.json({ orderID: data.id, approveUrl });
+  } catch (err) {
+    console.error("PayPal create-order server error:", err);
+    return res.status(500).json({ error: err.message || "Server error" });
+  }
+});
+
+// =====================
+// PayPal: Capture Order
+// =====================
+app.post("/paypal/capture-order", async (req, res) => {
+  try {
+    const { orderID } = req.body;
+    if (!orderID) return res.status(400).json({ error: "Missing orderID" 
+});
+
+    const accessToken = await getPayPalAccessToken();
+
+    const ppResp = await fetch(
+      `${PAYPAL_BASE}/v2/checkout/orders/${orderID}/capture`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    const data = await ppResp.json();
+    if (!ppResp.ok) {
+      console.error("PayPal capture error:", data);
+      return res.status(500).json({ error: "Capture failed", details: data 
+});
+    }
+
+    return res.json(data);
+  } catch (err) {
+    console.error("PayPal capture server error:", err);
+    return res.status(500).json({ error: err.message || "Server error" });
+  }
+});
+
+// =====================
+// Stripe: Create Checkout Session (kept)
+// =====================
 app.post("/create-checkout-session", async (req, res) => {
   try {
     if (!stripe) {
@@ -68,7 +211,6 @@ app.post("/create-checkout-session", async (req, res) => {
       });
     }
 
-    // Optional shipping as its own line item
     if (typeof shipping === "number" && shipping > 0) {
       line_items.push({
         price_data: {
@@ -84,7 +226,6 @@ app.post("/create-checkout-session", async (req, res) => {
       return res.status(400).json({ error: "No valid line items" });
     }
 
-    // ✅ Promotion code lookup by customer-entered code (SAVE10 / TAKE10)
     const normalizedCoupon = normalizeCoupon(coupon);
 
     let discounts;
@@ -109,16 +250,12 @@ app.post("/create-checkout-session", async (req, res) => {
       mode: "payment",
       line_items,
       discounts: discounts || undefined,
-
       success_url:
         
 "https://arcticlabsupply.com/success?session_id={CHECKOUT_SESSION_ID}",
       cancel_url: "https://arcticlabsupply.com/cart",
-
       shipping_address_collection: { allowed_countries: ["US"] },
       phone_number_collection: { enabled: true },
-
-      // Helpful for tracking which code was used
       metadata: {
         source: "arcticlabsupply-cart",
         coupon_code: normalizedCoupon || "",
@@ -137,10 +274,7 @@ err);
   }
 });
 
-/**
- * Retrieve Stripe Checkout Session details (for GA4 purchase event)
- * GET /stripe/session?session_id=cs_test_...
- */
+// Stripe session endpoint (kept)
 app.get("/stripe/session", async (req, res) => {
   try {
     if (!stripe) {
@@ -151,10 +285,8 @@ app.get("/stripe/session", async (req, res) => {
     }
 
     const { session_id } = req.query;
-
-    if (!session_id) {
-      return res.status(400).json({ error: "Missing session_id" });
-    }
+    if (!session_id) return res.status(400).json({ error: "Missing 
+session_id" });
 
     const session = await stripe.checkout.sessions.retrieve(session_id, {
       expand: ["payment_intent", "line_items.data.price.product"],
@@ -175,13 +307,11 @@ app.get("/stripe/session", async (req, res) => {
 
         return {
           item_id:
-            (typeof product === "object" && product?.id) ||
-            price?.id ||
-            "unknown",
+            (typeof product === "object" && product?.id) || price?.id || 
+"unknown",
           item_name:
-            (typeof product === "object" && product?.name) ||
-            li.description ||
-            "Item",
+            (typeof product === "object" && product?.name) || 
+li.description || "Item",
           price: (price?.unit_amount || 0) / 100,
           quantity: li.quantity || 1,
         };
