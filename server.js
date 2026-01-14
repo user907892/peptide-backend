@@ -1,4 +1,4 @@
-k// server.js
+// server.js
 // ArcticLabSupply backend (Render) — Stripe Checkout + Promotion Codes + PayPal Orders API
 
 const express = require("express");
