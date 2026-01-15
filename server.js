@@ -64,10 +64,8 @@ console.log("Supabase service key present:", !!SUPABASE_SERVICE_ROLE_KEY);
 ------------------------ */
 app.post("/orders/create", async (req, res) => {
   try {
-    if (!supabase) return res.status(500).json({ error: "Supabase not 
-configured" });
-
-    const { items, totals, coupon, timestamp } = req.body || {};
+    if (!supabase) return res.status(500).json({ error: "Supabase not configured" });
+const { items, totals, coupon, timestamp } = req.body || {};
 
     if (!Array.isArray(items) || items.length === 0) {
       return res.status(400).json({ error: "items required" });
