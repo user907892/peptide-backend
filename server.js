@@ -64,11 +64,84 @@ console.log("Supabase service key present:", !!SUPABASE_SERVICE_ROLE_KEY);
    Orders: create
    POST /orders/create
 ------------------------ */
-app.post("/orders/create", async (req, res) => {
+app.post("/orders/confirm", async (req, res) => {
   try {
     if (!supabase) {
-      return res.status(500).json({ error: "Supabase not configured" });
+      return res.status(500).json({ ok: false, message: "Supabase not 
+configured" });
     }
+
+    const { orderId, transactionId, pendingOrder } = req.body || {};
+
+    if (!pendingOrder) {
+      return res.status(400).json({ ok: false, message: "Missing 
+pendingOrder payload" });
+    }
+
+    const resolvedOrderId = orderId || pendingOrder.orderId || 
+`ORD-${Date.now()}`;
+
+    const totals = {
+      sub: pendingOrder.subtotal ?? pendingOrder.sub ?? 0,
+      discount: pendingOrder.discount ?? 0,
+      shippingCost: pendingOrder.shippingCost ?? pendingOrder.shipping ?? 
+0,
+      total: pendingOrder.total ?? 0,
+    };
+
+    const shippingAddress =
+      pendingOrder.shippingAddress || pendingOrder.shipping || null;
+
+    const payload = {
+      order_id: resolvedOrderId,
+      items: pendingOrder.items || [],
+      totals,
+      coupon: pendingOrder.coupon || null,
+      shipping_address: shippingAddress,
+      payment_status: "paid",
+      paid_at: new Date().toISOString(),
+      square_transaction_id: transactionId || null,
+      status: "paid",
+    };
+
+    // ✅ Update existing order row created before redirect
+    const { data: updated, error: updateErr } = await supabase
+      .from("orders")
+      .update(payload)
+      .eq("order_id", resolvedOrderId)
+      .select("*")
+      .maybeSingle();
+
+    if (updateErr) {
+      console.error("Supabase update error:", updateErr);
+      return res.status(500).json({ ok: false, message: "Supabase update 
+failed", error: updateErr.message });
+    }
+
+    if (updated) {
+      return res.json({ ok: true, mode: "updated", order: updated });
+    }
+
+    // ✅ If no row existed, insert fallback
+    const { data: inserted, error: insertErr } = await supabase
+      .from("orders")
+      .insert([payload])
+      .select("*")
+      .single();
+
+    if (insertErr) {
+      console.error("Supabase insert error:", insertErr);
+      return res.status(500).json({ ok: false, message: "Supabase insert 
+failed", error: insertErr.message });
+    }
+
+    return res.json({ ok: true, mode: "inserted", order: inserted });
+  } catch (e) {
+    console.error("orders/confirm crash:", e);
+    return res.status(500).json({ ok: false, message: "Server error", 
+details: String(e?.message || e) });
+  }
+});
 
     const body = req.body || {};
     const items = body.items;
