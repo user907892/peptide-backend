@@ -108,8 +108,7 @@ String(err?.message || err) });
 app.post("/orders/confirm", async (req, res) => {
   try {
     if (!supabase) {
-      return res.status(500).json({ ok: false, message: "Supabase not 
-configured" });
+      return res.status(500).json({ ok: false, message: "Supabase not configured" });
     }
 
     const { orderId, transactionId, pendingOrder } = req.body || {};
