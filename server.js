@@ -1,4 +1,4 @@
-"use strict";
+"use strict";=
 
 /*
 server.js
@@ -93,8 +93,7 @@ let square = null;
 
 if (process.env.SQUARE_ACCESS_TOKEN && process.env.SQUARE_LOCATION_ID) {
   if (!SquareClient || !SquareEnvironment) {
-    // If the SDK export shape changed, fail gracefully (don’t crash 
-deploy)
+    // If the SDK export shape changed, fail gracefully (don’t crash deploy)
     console.warn("⚠️ Square SDK loaded but missing Client/Environment 
 exports. Check square package version.");
   } else {
