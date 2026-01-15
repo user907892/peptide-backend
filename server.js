@@ -14,6 +14,15 @@ app.use(cors());
 app.use(express.json());
 
 /* -----------------------
+   Helpers
+------------------------ */
+function mask(token) {
+  const t = String(token || "");
+  if (t.length <= 8) return "********";
+  return `${t.slice(0, 4)}...${t.slice(-4)}`;
+}
+
+/* -----------------------
    Health
 ------------------------ */
 app.get("/", (_req, res) => {
@@ -23,8 +32,8 @@ app.get("/", (_req, res) => {
 /* -----------------------
    Supabase
 ------------------------ */
-const SUPABASE_URL = process.env.SUPABASE_URL || "";
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+const SUPABASE_URL = String(process.env.SUPABASE_URL || "").trim();
+const SUPABASE_SERVICE_ROLE_KEY = String(process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
 
 const supabase =
   SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
@@ -63,18 +72,52 @@ app.post("/orders/create", async (req, res) => {
 });
 
 /* -----------------------
-   Square Setup
+   Square Setup (DIAGNOSTICS)
 ------------------------ */
-const SQUARE_ACCESS_TOKEN = process.env.SQUARE_ACCESS_TOKEN || "";
-const SQUARE_LOCATION_ID = process.env.SQUARE_LOCATION_ID || "";
+const RAW_ENV = String(process.env.SQUARE_ENV || "").trim().toLowerCase();
+if (RAW_ENV !== "production" && RAW_ENV !== "sandbox") {
+  console.error(`❌ SQUARE_ENV must be "production" or "sandbox" (got "${process.env.SQUARE_ENV}")`);
+}
+
 const SQUARE_ENV =
-  process.env.SQUARE_ENV === "production"
-    ? SquareEnvironment.Production
-    : SquareEnvironment.Sandbox;
+  RAW_ENV === "production" ? SquareEnvironment.Production : SquareEnvironment.Sandbox;
+
+const RAW_TOKEN = String(process.env.SQUARE_ACCESS_TOKEN || "");
+const SQUARE_ACCESS_TOKEN = RAW_TOKEN.trim(); // trim removes accidental spaces/newlines
+const SQUARE_LOCATION_ID = String(process.env.SQUARE_LOCATION_ID || "").trim();
+
+const tokenHasWhitespace = /\s/.test(RAW_TOKEN);
+const tokenLen = RAW_TOKEN.length;
+const tokenLenTrim = SQUARE_ACCESS_TOKEN.length;
+
+console.log("Square env:", RAW_ENV || "(missing)");
+console.log("Square token:", mask(SQUARE_ACCESS_TOKEN));
+console.log("Square token length:", tokenLen, "trimmed:", tokenLenTrim, "hasWhitespace:", tokenHasWhitespace);
+console.log("Square location:", SQUARE_LOCATION_ID || "(missing)");
+
+if (!SQUARE_ACCESS_TOKEN || !SQUARE_LOCATION_ID) {
+  console.error("❌ Missing SQUARE_ACCESS_TOKEN and/or SQUARE_LOCATION_ID");
+}
 
 const squareClient = new SquareClient({
   environment: SQUARE_ENV,
   accessToken: SQUARE_ACCESS_TOKEN,
+});
+
+/**
+ * GET /square/debug
+ * Returns ONLY non-secret diagnostics so you can confirm Render is using what you think.
+ */
+app.get("/square/debug", (_req, res) => {
+  res.json({
+    ok: true,
+    env: RAW_ENV || null,
+    locationIdSet: Boolean(SQUARE_LOCATION_ID),
+    tokenMasked: mask(SQUARE_ACCESS_TOKEN),
+    tokenLength: tokenLen,
+    tokenLengthTrimmed: tokenLenTrim,
+    tokenHasWhitespace,
+  });
 });
 
 /* -----------------------
@@ -86,11 +129,13 @@ app.get("/square/health", async (_req, res) => {
     const locations = result.result.locations || [];
     res.json({
       ok: true,
+      env: RAW_ENV,
       locationsFound: locations.length,
-      locationIdExistsInAccount: locations.some(l => l.id === SQUARE_LOCATION_ID),
+      locationIdExistsInAccount: locations.some((l) => l.id === SQUARE_LOCATION_ID),
     });
   } catch (err) {
-    res.status(500).json({ ok: false, error: err?.errors || err });
+    console.error("Square health error:", err?.errors || err);
+    res.status(500).json({ ok: false, env: RAW_ENV, error: err?.errors || err });
   }
 });
 
@@ -143,7 +188,7 @@ app.post("/square/create-checkout", async (req, res) => {
 /* -----------------------
    Start Server
 ------------------------ */
-const PORT = process.env.PORT || 10000;
+const PORT = Number(process.env.PORT) || 10000;
 app.listen(PORT, () => {
   console.log(`✅ Backend listening on ${PORT}`);
 });
