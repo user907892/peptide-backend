@@ -123,8 +123,7 @@ app.get("/admin/orders", async (req, res) => {
 
     const { data, error } = await supabase
       .from("orders")
-      .select("id, created_at, items, totals, coupon, client_timestamp, 
-status")
+      .select("id, created_at, items, totals, coupon, client_timestamp, status")
       .order("created_at", { ascending: false })
       .limit(200);
 
