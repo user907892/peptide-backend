@@ -1,10 +1,15 @@
 // server.js
-// ArcticLabSupply backend (Render) — Stripe Checkout + Promotion Codes + PayPal Orders API
+// ArcticLabSupply backend (Render) — Stripe Checkout + Promotion Codes + 
+PayPal Orders API + Square Hosted Checkout
 
 const express = require("express");
 const cors = require("cors");
 const Stripe = require("stripe");
+const crypto = require("crypto");
+const { Client, Environment } = require("square");
 
+// Node 18+ has global fetch. If you’re on older Node, install node-fetch 
+and import it.
 const app = express();
 
 // ✅ CORS (site + localhost) — robust preflight support
@@ -56,9 +61,10 @@ async function getPayPalAccessToken() {
     throw new Error("Missing PAYPAL_CLIENT_ID or PAYPAL_CLIENT_SECRET");
   }
 
-  const auth = Buffer.from(
-    `${PAYPAL_CLIENT_ID}:${PAYPAL_CLIENT_SECRET}`
-  ).toString("base64");
+  const auth = 
+Buffer.from(`${PAYPAL_CLIENT_ID}:${PAYPAL_CLIENT_SECRET}`).toString(
+    "base64"
+  );
 
   const resp = await fetch(`${PAYPAL_BASE}/v1/oauth2/token`, {
     method: "POST",
@@ -78,10 +84,117 @@ async function getPayPalAccessToken() {
 }
 
 // =====================
+// Square (Hosted Checkout via Payment Link)
+// =====================
+let square = null;
+if (!process.env.SQUARE_ACCESS_TOKEN || !process.env.SQUARE_LOCATION_ID) {
+  console.warn("⚠️ Missing SQUARE_ACCESS_TOKEN or SQUARE_LOCATION_ID.");
+} else {
+  const env = (process.env.SQUARE_ENV || "production").toLowerCase();
+  square = new Client({
+    accessToken: process.env.SQUARE_ACCESS_TOKEN,
+    environment: env === "sandbox" ? Environment.Sandbox : 
+Environment.Production,
+  });
+}
+
+// =====================
 // Health
 // =====================
 app.get("/", (req, res) => {
   res.json({ status: "ok", message: "ArcticLabSupply backend live" });
+});
+
+// =====================
+// Square: Create Payment Link -> url
+// =====================
+// Frontend calls: POST {API_BASE}/square/create-checkout
+// Body: { orderId, total, currency, successUrl, cancelUrl, coupon, items 
+}
+app.post("/square/create-checkout", async (req, res) => {
+  try {
+    if (!square) {
+      return res.status(500).json({
+        error: "Square not configured",
+        message: "Missing SQUARE_ACCESS_TOKEN / SQUARE_LOCATION_ID",
+      });
+    }
+
+    const {
+      orderId,
+      total,
+      currency = "USD",
+      successUrl,
+      cancelUrl, // NOTE: Square Payment Links don't use cancelUrl like 
+PayPal; kept for parity
+      items = [],
+      coupon = null,
+    } = req.body;
+
+    const value = Number(total);
+    if (!Number.isFinite(value) || value <= 0) {
+      return res.status(400).json({ error: "Invalid total" });
+    }
+    if (!successUrl) {
+      return res.status(400).json({ error: "Missing successUrl" });
+    }
+    if (!cancelUrl) {
+      // not required for Square, but your frontend sends it
+      console.warn("Square checkout: cancelUrl missing (not required).");
+    }
+
+    // We charge a single line item equal to the cart total.
+    // Later improvement: validate items/prices server-side and pass real 
+line items.
+    const lineItems = [
+      {
+        name: "Arctic Labs Order",
+        quantity: "1",
+        basePriceMoney: {
+          amount: Math.round(value * 100),
+          currency,
+        },
+      },
+    ];
+
+    // Optional description / tracking
+    const noteParts = [];
+    if (orderId) noteParts.push(`Order: ${orderId}`);
+    if (coupon) noteParts.push(`Coupon: ${coupon}`);
+    if (Array.isArray(items) && items.length) noteParts.push(`Items: 
+${items.length}`);
+
+    const idempotencyKey =
+      typeof crypto.randomUUID === "function"
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
+    const { result } = await square.checkoutApi.createPaymentLink({
+      idempotencyKey,
+      order: {
+        locationId: process.env.SQUARE_LOCATION_ID,
+        lineItems,
+      },
+      checkoutOptions: {
+        redirectUrl: successUrl,
+        askForShippingAddress: true,
+        // Optional support contact (change if you want)
+        merchantSupportEmail: "support@arcticlabsupply.com",
+      },
+      description: noteParts.join(" | ") || "Arctic Labs Supply checkout",
+    });
+
+    const url = result?.paymentLink?.url;
+    if (!url) {
+      return res.status(500).json({ error: "Square did not return a 
+checkout URL" });
+    }
+
+    return res.json({ url });
+  } catch (err) {
+    console.error("Square create-checkout server error:", err);
+    return res.status(500).json({ error: err.message || "Server error" });
+  }
 });
 
 // =====================
@@ -166,16 +279,14 @@ app.post("/paypal/capture-order", async (req, res) => {
 
     const accessToken = await getPayPalAccessToken();
 
-    const ppResp = await fetch(
-      `${PAYPAL_BASE}/v2/checkout/orders/${orderID}/capture`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": "application/json",
-        },
-      }
-    );
+    const ppResp = await 
+fetch(`${PAYPAL_BASE}/v2/checkout/orders/${orderID}/capture`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
 
     const data = await ppResp.json();
     if (!ppResp.ok) {
@@ -325,8 +436,9 @@ app.get("/stripe/session", async (req, res) => {
             (typeof product === "object" && product?.id) || price?.id || 
 "unknown",
           item_name:
-            (typeof product === "object" && product?.name) || 
-li.description || "Item",
+            (typeof product === "object" && product?.name) ||
+            li.description ||
+            "Item",
           price: (price?.unit_amount || 0) / 100,
           quantity: li.quantity || 1,
         };
