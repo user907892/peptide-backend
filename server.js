@@ -1,11 +1,10 @@
-/ server.js
+// server.js
 "use strict";
 
 const express = require("express");
 const cors = require("cors");
 const crypto = require("crypto");
 
-// Square SDK (new exports)
 const { SquareClient, SquareEnvironment } = require("square");
 
 const app = express();
@@ -21,7 +20,7 @@ const allowedOrigins = [
 
 app.use(
   cors({
-    origin: function (origin, cb) {
+    origin(origin, cb) {
       if (!origin) return cb(null, true);
       if (allowedOrigins.includes(origin)) return cb(null, true);
       return cb(new Error(`CORS blocked for origin: ${origin}`));
@@ -57,16 +56,7 @@ const squareClient = SQUARE_ACCESS_TOKEN
     })
   : null;
 
-/**
- * POST /square/create-checkout
- * Body:
- * {
- *   total: "19.94",
- *   currency: "USD",
- *   returnUrl: "https://.../square-success",
- *   cancelUrl: "https://.../cart"
- * }
- */
+// ---- Routes ----
 app.post("/square/create-checkout", async (req, res) => {
   try {
     if (!squareClient || !SQUARE_LOCATION_ID) {
@@ -83,17 +73,14 @@ app.post("/square/create-checkout", async (req, res) => {
     if (!Number.isFinite(amount) || amount <= 0) {
       return res.status(400).json({ error: "Invalid total" });
     }
-
     if (!returnUrl || !cancelUrl) {
       return res.status(400).json({ error: "Missing returnUrl/cancelUrl" 
 });
     }
 
-    // cents (number)
     const cents = Math.round(amount * 100);
     const idempotencyKey = crypto.randomUUID();
 
-    // Create a payment link
     const response = await squareClient.checkoutApi.createPaymentLink({
       idempotencyKey,
       order: {
@@ -102,24 +89,16 @@ app.post("/square/create-checkout", async (req, res) => {
           {
             name: "Order Total",
             quantity: "1",
-            basePriceMoney: {
-              amount: cents,
-              currency,
-            },
+            basePriceMoney: { amount: cents, currency },
           },
         ],
       },
-      checkoutOptions: {
-        redirectUrl: returnUrl,
-      },
+      checkoutOptions: { redirectUrl: returnUrl },
     });
 
     const checkoutUrl = response?.result?.paymentLink?.url;
     if (!checkoutUrl) {
-      return res.status(500).json({
-        error: "No checkout URL returned",
-        details: response?.result || null,
-      });
+      return res.status(500).json({ error: "No checkout URL returned" });
     }
 
     return res.json({ checkoutUrl });
