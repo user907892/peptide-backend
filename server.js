@@ -11,7 +11,7 @@ dotenv.config();
 
 const app = express();
 
-/* CORS */
+/* ================= CORS ================= */
 const allowedOrigins = [
   "https://arcticlabsupply.com",
   "https://www.arcticlabsupply.com",
@@ -25,7 +25,7 @@ app.use(
     origin(origin, cb) {
       if (!origin) return cb(null, true);
       if (allowedOrigins.includes(origin)) return cb(null, true);
-      return cb(new Error(`CORS blocked for origin: ${origin}`));
+      return cb(new Error("CORS blocked"));
     },
     methods: ["GET", "POST", "OPTIONS"],
     allowedHeaders: ["Content-Type", "x-admin-token"],
@@ -35,204 +35,135 @@ app.use(
 app.options("*", cors());
 app.use(express.json());
 
-/* Health */
-app.get("/", (req, res) => {
-  res.json({ status: "ok", message: "Backend live" });
+/* ================= HEALTH ================= */
+app.get("/", (_req, res) => {
+  res.json({ ok: true, message: "Backend live" });
 });
 
-/* Supabase */
-const SUPABASE_URL = String(process.env.SUPABASE_URL || "").trim();
-const SUPABASE_SERVICE_ROLE_KEY = String(process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
-
+/* ================= SUPABASE ================= */
 const supabase =
-  SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
-    ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+  process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY
+    ? createClient(
+        process.env.SUPABASE_URL,
+        process.env.SUPABASE_SERVICE_ROLE_KEY
+      )
     : null;
 
-/* Orders: create */
+/* ================= ORDERS ================= */
 app.post("/orders/create", async (req, res) => {
   try {
-    if (!supabase) {
-      return res.status(500).json({ error: "Supabase not configured" });
-    }
+    if (!supabase) throw new Error("Supabase not configured");
 
-    const body = req.body || {};
-    const items = body.items;
-    const totals = body.totals;
+    const { items, totals, coupon, shipping, timestamp } = req.body;
 
-    if (!Array.isArray(items) || items.length === 0) {
+    if (!Array.isArray(items) || items.length === 0)
       return res.status(400).json({ error: "items required" });
-    }
-    if (!totals || typeof totals !== "object") {
-      return res.status(400).json({ error: "totals required" });
-    }
-
-    const payload = {
-      order_id: body.orderId || null,
-      items,
-      totals,
-      coupon: body.coupon || null,
-      shipping_address: body.shippingAddress || body.shipping || null,
-      client_timestamp: body.timestamp ? new Date(body.timestamp).toISOString() : null,
-      status: "new",
-      payment_status: "pending",
-    };
 
     const { data, error } = await supabase
       .from("orders")
-      .insert([payload])
-      .select("id, created_at, order_id")
+      .insert({
+        items,
+        totals,
+        coupon: coupon || null,
+        shipping_address: shipping || null,
+        client_timestamp: timestamp || null,
+        status: "new",
+        payment_status: "pending",
+      })
+      .select()
       .single();
 
-    if (error) {
-      return res.status(500).json({ error: "db insert failed", details: error.message });
-    }
+    if (error) throw error;
 
-    return res.json({ ok: true, order: data });
+    res.json({ ok: true, order: data });
   } catch (err) {
-    return res.status(500).json({ error: "server error", details: String(err?.message || err) });
+    res.status(500).json({ error: err.message });
   }
 });
 
-/* Orders: confirm */
-app.post("/orders/confirm", async (req, res) => {
-  try {
-    if (!supabase) {
-      return res.status(500).json({ ok: false, message: "Supabase not configured" });
-    }
-
-    const { orderId, transactionId, pendingOrder } = req.body || {};
-
-    if (!pendingOrder) {
-      return res.status(400).json({ ok: false, message: "Missing pendingOrder payload" });
-    }
-
-    const resolvedOrderId = orderId || pendingOrder.orderId || `ORD-${Date.now()}`;
-
-    const totals = {
-      sub: pendingOrder.subtotal ?? pendingOrder.sub ?? 0,
-      discount: pendingOrder.discount ?? 0,
-      shippingCost: pendingOrder.shippingCost ?? pendingOrder.shipping ?? 0,
-      total: pendingOrder.total ?? 0,
-    };
-
-    const payload = {
-      order_id: resolvedOrderId,
-      items: pendingOrder.items || [],
-      totals,
-      coupon: pendingOrder.coupon || null,
-      shipping_address: pendingOrder.shippingAddress || pendingOrder.shipping || null,
-      payment_status: "paid",
-      paid_at: new Date().toISOString(),
-      square_transaction_id: transactionId || null,
-      status: "paid",
-    };
-
-    const { data, error } = await supabase
-      .from("orders")
-      .insert([payload])
-      .select("id, created_at, order_id")
-      .single();
-
-    if (error) {
-      return res.status(500).json({ ok: false, message: "Supabase insert failed", error: error.message });
-    }
-
-    return res.json({ ok: true, order: data });
-  } catch (err) {
-    return res.status(500).json({ ok: false, message: "Server error", details: String(err?.message || err) });
-  }
-});
-
-/* Admin */
+/* ================= ADMIN ================= */
 app.get("/admin/orders", async (req, res) => {
   try {
-    if (!supabase) {
-      return res.status(500).json({ error: "Supabase not configured" });
-    }
+    if (!supabase) throw new Error("Supabase not configured");
 
-    const token = String(req.headers["x-admin-token"] || "").trim();
-    const expected = String(process.env.ADMIN_TOKEN || "").trim();
-
-    if (!expected || token !== expected) {
-      return res.status(401).json({ error: "unauthorized" });
+    if (req.headers["x-admin-token"] !== process.env.ADMIN_TOKEN) {
+      return res.status(401).json({ error: "Unauthorized" });
     }
 
     const { data, error } = await supabase
       .from("orders")
       .select("*")
-      .order("created_at", { ascending: false })
-      .limit(200);
+      .order("created_at", { ascending: false });
 
-    if (error) {
-      return res.status(500).json({ error: "db read failed", details: error.message });
-    }
+    if (error) throw error;
 
-    return res.json({ orders: data });
+    res.json({ orders: data });
   } catch (err) {
-    return res.status(500).json({ error: "server error", details: String(err?.message || err) });
+    res.status(500).json({ error: err.message });
   }
 });
 
-/* Square checkout */
-const SQUARE_ACCESS_TOKEN = process.env.SQUARE_ACCESS_TOKEN;
-const SQUARE_LOCATION_ID = process.env.SQUARE_LOCATION_ID;
-const SQUARE_ENV = String(process.env.SQUARE_ENV || "sandbox").toLowerCase();
-
-function getSquareEnvironment() {
-  return SQUARE_ENV === "production" ? SquareEnvironment.Production : SquareEnvironment.Sandbox;
-}
-
-const squareClient = SQUARE_ACCESS_TOKEN
-  ? new SquareClient({
-      environment: getSquareEnvironment(),
-      bearerAuthCredentials: { accessToken: SQUARE_ACCESS_TOKEN },
-    })
-  : null;
+/* ================= SQUARE ================= */
+const squareClient =
+  process.env.SQUARE_ACCESS_TOKEN &&
+  process.env.SQUARE_LOCATION_ID
+    ? new SquareClient({
+        environment:
+          process.env.SQUARE_ENV === "production"
+            ? SquareEnvironment.Production
+            : SquareEnvironment.Sandbox,
+        bearerAuthCredentials: {
+          accessToken: process.env.SQUARE_ACCESS_TOKEN,
+        },
+      })
+    : null;
 
 app.post("/square/create-checkout", async (req, res) => {
   try {
-    if (!squareClient || !SQUARE_LOCATION_ID) {
-      return res.status(500).json({ error: "Square not configured" });
-    }
+    if (!squareClient) throw new Error("Square not configured");
 
-    const amount = Number(req.body?.total);
-
-    if (!Number.isFinite(amount) || amount <= 0) {
+    const total = Number(req.body.total);
+    if (!Number.isFinite(total) || total <= 0)
       return res.status(400).json({ error: "Invalid total" });
-    }
 
-    const cents = BigInt(Math.round(amount * 100));
+    const cents = BigInt(Math.round(total * 100));
 
-    const resp = await squareClient.checkout.paymentLinks.create({
+    const result = await squareClient.checkout.paymentLinks.create({
       idempotencyKey: crypto.randomUUID(),
       order: {
-        locationId: SQUARE_LOCATION_ID,
+        locationId: process.env.SQUARE_LOCATION_ID,
         lineItems: [
           {
-            name: "Order Total",
+            name: "Order",
             quantity: "1",
-            basePriceMoney: { amount: cents, currency: "USD" },
+            basePriceMoney: {
+              amount: cents,
+              currency: "USD",
+            },
           },
         ],
       },
-      checkoutOptions: { redirectUrl: req.body.returnUrl },
+      checkoutOptions: {
+        redirectUrl: req.body.returnUrl,
+      },
     });
 
-    const checkoutUrl = resp?.result?.paymentLink?.url;
+    const checkoutUrl = result?.result?.paymentLink?.url;
+    if (!checkoutUrl) throw new Error("No checkout URL");
 
-    if (!checkoutUrl) {
-      return res.status(500).json({ error: "No checkout URL returned" });
-    }
-
-    return res.json({ checkoutUrl });
+    res.json({ checkoutUrl });
   } catch (err) {
-    return res.status(500).json({ error: "Square checkout failed", details: String(err?.message || err) });
+    console.error("Square error:", err);
+    res.status(500).json({
+      error: "Square checkout failed",
+      details: err.message,
+    });
   }
 });
 
-/* Start */
-const PORT = Number(process.env.PORT) || 10000;
+/* ================= START ================= */
+const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => {
-  console.log(`Backend listening on ${PORT}`);
+  console.log(`Backend running on ${PORT}`);
 });
+
