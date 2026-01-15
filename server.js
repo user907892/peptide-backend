@@ -21,6 +21,7 @@ const allowedOrigins = [
 app.use(
   cors({
     origin(origin, cb) {
+      // allow no-origin (server-to-server, curl)
       if (!origin) return cb(null, true);
       if (allowedOrigins.includes(origin)) return cb(null, true);
       return cb(new Error(`CORS blocked for origin: ${origin}`));
@@ -49,10 +50,23 @@ function getSquareEnvironment() {
     : SquareEnvironment.Sandbox;
 }
 
+// ✅ Safe debug (does NOT print the token itself)
+console.log("Square ENV:", SQUARE_ENV);
+console.log(
+  "Square token present:",
+  !!SQUARE_ACCESS_TOKEN,
+  "len:",
+  (SQUARE_ACCESS_TOKEN || "").length
+);
+console.log("Square location:", SQUARE_LOCATION_ID);
+
+// ✅ Bulletproof auth config across Square SDK versions
 const squareClient = SQUARE_ACCESS_TOKEN
   ? new SquareClient({
       environment: getSquareEnvironment(),
       token: SQUARE_ACCESS_TOKEN,
+      accessToken: SQUARE_ACCESS_TOKEN,
+      bearerAuthCredentials: { accessToken: SQUARE_ACCESS_TOKEN },
     })
   : null;
 
@@ -78,13 +92,12 @@ app.post("/square/create-checkout", async (req, res) => {
 });
     }
 
-    // convert dollars -> cents -> BigInt
+    // dollars -> cents -> BigInt (your SDK expects bigint)
     const centsNumber = Math.round(amount * 100);
     const cents = BigInt(centsNumber);
 
     const idempotencyKey = crypto.randomUUID();
 
-    // ✅ New Square SDK: checkout.paymentLinks.create(...)
     const resp = await squareClient.checkout.paymentLinks.create({
       idempotencyKey,
       order: {
@@ -94,7 +107,7 @@ app.post("/square/create-checkout", async (req, res) => {
             name: "Order Total",
             quantity: "1",
             basePriceMoney: {
-              amount: cents, // ✅ BigInt required
+              amount: cents,
               currency,
             },
           },
