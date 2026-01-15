@@ -1,4 +1,4 @@
-"use strict";
+k"use strict";
 
 const express = require("express");
 const cors = require("cors");
@@ -48,8 +48,9 @@ app.get("/", (req, res) => {
 // --------------------
 // Supabase
 // --------------------
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const SUPABASE_URL = String(process.env.SUPABASE_URL || "").trim();
+const SUPABASE_SERVICE_ROLE_KEY = 
+String(process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
 
 if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
   console.error("❌ Supabase env vars missing");
@@ -65,9 +66,11 @@ const supabase =
 // --------------------
 app.post("/orders/create", async (req, res) => {
   try {
-    if (!supabase) return res.status(500).json({ error: "Supabase not configured" });
+    if (!supabase) {
+      return res.status(500).json({ error: "Supabase not configured" });
+    }
 
-    const { items, totals, coupon, timestamp } = req.body;
+    const { items, totals, coupon, timestamp } = req.body || {};
 
     const { data, error } = await supabase
       .from("orders")
@@ -76,9 +79,8 @@ app.post("/orders/create", async (req, res) => {
           items,
           totals,
           coupon: coupon || null,
-          client_timestamp: timestamp
-            ? new Date(timestamp).toISOString()
-            : null,
+          client_timestamp: timestamp ? new Date(timestamp).toISOString() 
+: null,
           status: "new",
         },
       ])
@@ -87,11 +89,11 @@ app.post("/orders/create", async (req, res) => {
 
     if (error) throw error;
 
-    res.json({ ok: true, order: data });
+    return res.json({ ok: true, order: data });
   } catch (err) {
     console.error("orders/create error:", err);
-    res.status(500).json({ error: "db insert failed", details: err.message 
-});
+    return res.status(500).json({ error: "db insert failed", details: 
+err.message });
   }
 });
 
@@ -100,11 +102,13 @@ app.post("/orders/create", async (req, res) => {
 // --------------------
 app.get("/admin/orders", async (req, res) => {
   try {
-    if (!supabase) return res.status(500).json({ error: "Supabase not 
-configured" });
+    if (!supabase) {
+      return res.status(500).json({ error: "Supabase not configured" });
+    }
 
-    const token = req.headers["x-admin-token"];
-    const expected = process.env.ADMIN_TOKEN;
+    // Trim to avoid hidden spaces/newlines
+    const token = String(req.headers["x-admin-token"] || "").trim();
+    const expected = String(process.env.ADMIN_TOKEN || "").trim();
 
     if (!expected || token !== expected) {
       return res.status(401).json({ error: "unauthorized" });
@@ -112,19 +116,18 @@ configured" });
 
     const { data, error } = await supabase
       .from("orders")
-      .select(
-        "id, created_at, items, totals, coupon, client_timestamp, status"
-      )
+      .select("id, created_at, items, totals, coupon, client_timestamp, 
+status")
       .order("created_at", { ascending: false })
       .limit(200);
 
     if (error) throw error;
 
-    res.json({ orders: data });
+    return res.json({ orders: data });
   } catch (err) {
     console.error("admin/orders error:", err);
-    res.status(500).json({ error: "db read failed", details: err.message 
-});
+    return res.status(500).json({ error: "db read failed", details: 
+err.message });
   }
 });
 
@@ -134,12 +137,15 @@ configured" });
 const squareClient = process.env.SQUARE_ACCESS_TOKEN
   ? new SquareClient({
       environment:
-        process.env.SQUARE_ENV === "production"
+        (process.env.SQUARE_ENV || "sandbox") === "production"
           ? SquareEnvironment.Production
           : SquareEnvironment.Sandbox,
       accessToken: process.env.SQUARE_ACCESS_TOKEN,
     })
   : null;
+
+// (Your Square route can remain elsewhere if you have it; this just sets 
+up the client.)
 
 // --------------------
 const PORT = process.env.PORT || 10000;
