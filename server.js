@@ -6,11 +6,11 @@ const cors = require("cors");
 const crypto = require("crypto");
 const dotenv = require("dotenv");
 const { createClient } = require("@supabase/supabase-js");
-
 const { SquareClient, SquareEnvironment } = require("square");
 
-// ✅ load env from a file literally named: "env"
-dotenv.config({ path: "env" });
+// ✅ Load local .env if present (Render uses Environment Variables 
+automatically)
+dotenv.config();
 
 const app = express();
 
@@ -32,7 +32,6 @@ app.use(
       return cb(new Error(`CORS blocked for origin: ${origin}`));
     },
     methods: ["GET", "POST", "OPTIONS"],
-    // ✅ allow admin token header too
     allowedHeaders: ["Content-Type", "x-admin-token"],
   })
 );
@@ -50,7 +49,6 @@ app.get("/", (req, res) => {
 // =========================
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const ADMIN_TOKEN = process.env.ADMIN_TOKEN;
 
 const supabase =
   SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
@@ -60,7 +58,7 @@ const supabase =
 console.log("Supabase URL present:", !!SUPABASE_URL);
 console.log("Supabase service key present:", !!SUPABASE_SERVICE_ROLE_KEY);
 
-// ✅ 1) CREATE ORDER (customer checkout hits this)
+// ✅ 1) CREATE ORDER
 app.post("/orders/create", async (req, res) => {
   try {
     if (!supabase) {
@@ -117,15 +115,18 @@ app.get("/admin/orders", async (req, res) => {
       });
     }
 
-    // Simple protection
+    // ✅ Read token from env at request time (fixes stale env problems)
     const token = req.headers["x-admin-token"];
-    if (!ADMIN_TOKEN || token !== ADMIN_TOKEN) {
+    const expected = process.env.ADMIN_TOKEN;
+
+    if (!expected || token !== expected) {
       return res.status(401).json({ error: "unauthorized" });
     }
 
     const { data, error } = await supabase
       .from("orders")
-      .select("id, created_at, items, totals, coupon, client_timestamp, status")
+      .select("id, created_at, items, totals, coupon, client_timestamp, 
+status")
       .order("created_at", { ascending: false })
       .limit(200);
 
@@ -143,7 +144,7 @@ error.message });
 });
 
 // =========================
-// ✅ SQUARE (your existing)
+// ✅ SQUARE (Checkout)
 // =========================
 const SQUARE_ACCESS_TOKEN = process.env.SQUARE_ACCESS_TOKEN;
 const SQUARE_LOCATION_ID = process.env.SQUARE_LOCATION_ID;
@@ -157,12 +158,8 @@ function getSquareEnvironment() {
 
 // ✅ Safe debug (does NOT print the token itself)
 console.log("Square ENV:", SQUARE_ENV);
-console.log(
-  "Square token present:",
-  !!SQUARE_ACCESS_TOKEN,
-  "len:",
-  (SQUARE_ACCESS_TOKEN || "").length
-);
+console.log("Square token present:", !!SQUARE_ACCESS_TOKEN, "len:", 
+(SQUARE_ACCESS_TOKEN || "").length);
 console.log("Square location:", SQUARE_LOCATION_ID);
 
 // ✅ Bulletproof auth config across Square SDK versions
@@ -175,7 +172,6 @@ const squareClient = SQUARE_ACCESS_TOKEN
     })
   : null;
 
-// ---- Routes ----
 app.post("/square/create-checkout", async (req, res) => {
   try {
     if (!squareClient || !SQUARE_LOCATION_ID) {
