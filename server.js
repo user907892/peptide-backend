@@ -7,8 +7,7 @@ const Stripe = require("stripe");
 const crypto = require("crypto");
 const { Client, Environment } = require("square");
 
-// Node 18+ has global fetch. If you’re on older Node, install node-fetch 
-and import it.
+// Node 18+ has global fetch. If you’re on older Node, install node-fetch and import it.
 const app = express();
 
 // ✅ CORS (site + localhost) — robust preflight support
