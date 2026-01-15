@@ -65,8 +65,7 @@ const supabase =
 // --------------------
 app.post("/orders/create", async (req, res) => {
   try {
-    if (!supabase) return res.status(500).json({ error: "Supabase not 
-configured" });
+    if (!supabase) return res.status(500).json({ error: "Supabase not configured" });
 
     const { items, totals, coupon, timestamp } = req.body;
 
