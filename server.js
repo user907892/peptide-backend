@@ -5,8 +5,7 @@ const express = require("express");
 const cors = require("cors");
 const crypto = require("crypto");
 
-// ✅ New Square SDK exports (migration: Client->SquareClient, 
-Environment->SquareEnvironment)
+// ✅ New Square SDK exports (migration: Client->SquareClient,Environment->SquareEnvironment)
 const { SquareClient, SquareEnvironment } = require("square");
 
 const app = express();
