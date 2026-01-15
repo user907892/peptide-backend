@@ -1,4 +1,3 @@
-// server.js
 "use strict";
 
 const express = require("express");
@@ -8,7 +7,7 @@ const dotenv = require("dotenv");
 const { createClient } = require("@supabase/supabase-js");
 const { SquareClient, SquareEnvironment } = require("square");
 
-// ✅ Load local .env if present (Render uses Environment Variables automatically)
+// Load local .env if present (Render supplies env vars automatically)
 dotenv.config();
 
 const app = express();
@@ -25,7 +24,6 @@ const allowedOrigins = [
 app.use(
   cors({
     origin(origin, cb) {
-      // allow no-origin (server-to-server, curl)
       if (!origin) return cb(null, true);
       if (allowedOrigins.includes(origin)) return cb(null, true);
       return cb(new Error(`CORS blocked for origin: ${origin}`));
@@ -44,7 +42,7 @@ app.get("/", (req, res) => {
 });
 
 // =========================
-// ✅ SUPABASE (Order Hub)
+// SUPABASE (Order Hub)
 // =========================
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -57,7 +55,7 @@ const supabase =
 console.log("Supabase URL present:", !!SUPABASE_URL);
 console.log("Supabase service key present:", !!SUPABASE_SERVICE_ROLE_KEY);
 
-// ✅ 1) CREATE ORDER
+// 1) CREATE ORDER
 app.post("/orders/create", async (req, res) => {
   try {
     if (!supabase) {
@@ -93,8 +91,9 @@ app.post("/orders/create", async (req, res) => {
 
     if (error) {
       console.error("Supabase insert error:", error);
-      return res.status(500).json({ error: "db insert failed", details: 
-error.message });
+      return res
+        .status(500)
+        .json({ error: "db insert failed", details: error.message });
     }
 
     return res.json({ ok: true, order: data });
@@ -104,7 +103,7 @@ error.message });
   }
 });
 
-// ✅ 2) ADMIN LIST ORDERS
+// 2) ADMIN LIST ORDERS
 app.get("/admin/orders", async (req, res) => {
   try {
     if (!supabase) {
@@ -114,7 +113,7 @@ app.get("/admin/orders", async (req, res) => {
       });
     }
 
-    // ✅ Read token from env at request time (fixes stale env problems)
+    // ✅ Read expected token from Render env at request time
     const token = req.headers["x-admin-token"];
     const expected = process.env.ADMIN_TOKEN;
 
@@ -131,8 +130,9 @@ status")
 
     if (error) {
       console.error("Supabase list error:", error);
-      return res.status(500).json({ error: "db read failed", details: 
-error.message });
+      return res
+        .status(500)
+        .json({ error: "db read failed", details: error.message });
     }
 
     return res.json({ orders: data });
@@ -143,7 +143,7 @@ error.message });
 });
 
 // =========================
-// ✅ SQUARE (Checkout)
+// SQUARE (your existing)
 // =========================
 const SQUARE_ACCESS_TOKEN = process.env.SQUARE_ACCESS_TOKEN;
 const SQUARE_LOCATION_ID = process.env.SQUARE_LOCATION_ID;
@@ -155,13 +155,15 @@ function getSquareEnvironment() {
     : SquareEnvironment.Sandbox;
 }
 
-// ✅ Safe debug (does NOT print the token itself)
 console.log("Square ENV:", SQUARE_ENV);
-console.log("Square token present:", !!SQUARE_ACCESS_TOKEN, "len:", 
-(SQUARE_ACCESS_TOKEN || "").length);
+console.log(
+  "Square token present:",
+  !!SQUARE_ACCESS_TOKEN,
+  "len:",
+  (SQUARE_ACCESS_TOKEN || "").length
+);
 console.log("Square location:", SQUARE_LOCATION_ID);
 
-// ✅ Bulletproof auth config across Square SDK versions
 const squareClient = SQUARE_ACCESS_TOKEN
   ? new SquareClient({
       environment: getSquareEnvironment(),
@@ -192,10 +194,8 @@ app.post("/square/create-checkout", async (req, res) => {
 });
     }
 
-    // dollars -> cents -> BigInt
     const centsNumber = Math.round(amount * 100);
     const cents = BigInt(centsNumber);
-
     const idempotencyKey = crypto.randomUUID();
 
     const resp = await squareClient.checkout.paymentLinks.create({
