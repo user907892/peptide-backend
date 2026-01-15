@@ -11,9 +11,7 @@ dotenv.config();
 
 const app = express();
 
-/* -----------------------
-   CORS
------------------------- */
+/* CORS */
 const allowedOrigins = [
   "https://arcticlabsupply.com",
   "https://www.arcticlabsupply.com",
@@ -37,16 +35,12 @@ app.use(
 app.options("*", cors());
 app.use(express.json());
 
-/* -----------------------
-   Health
------------------------- */
+/* Health */
 app.get("/", (req, res) => {
   res.json({ status: "ok", message: "Backend live" });
 });
 
-/* -----------------------
-   Supabase
------------------------- */
+/* Supabase */
 const SUPABASE_URL = String(process.env.SUPABASE_URL || "").trim();
 const SUPABASE_SERVICE_ROLE_KEY = 
 String(process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
@@ -56,13 +50,7 @@ const supabase =
     ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
     : null;
 
-console.log("Supabase URL present:", !!SUPABASE_URL);
-console.log("Supabase service key present:", !!SUPABASE_SERVICE_ROLE_KEY);
-
-/* -----------------------
-   Orders: create
-   POST /orders/create
------------------------- */
+/* Orders: create */
 app.post("/orders/create", async (req, res) => {
   try {
     if (!supabase) {
@@ -94,27 +82,22 @@ null,
     const { data, error } = await supabase
       .from("orders")
       .insert([payload])
-      .select("id, created_at")
+      .select(["id", "created_at"].join(","))
       .single();
 
     if (error) {
-      console.error("Supabase insert error:", error);
       return res.status(500).json({ error: "db insert failed", details: 
 error.message });
     }
 
     return res.json({ ok: true, order: data });
   } catch (err) {
-    console.error("orders/create error:", err);
     return res.status(500).json({ error: "server error", details: 
 String(err?.message || err) });
   }
 });
 
-/* -----------------------
-   Orders: admin list
-   GET /admin/orders
------------------------- */
+/* Admin: list orders */
 app.get("/admin/orders", async (req, res) => {
   try {
     if (!supabase) {
@@ -128,29 +111,35 @@ app.get("/admin/orders", async (req, res) => {
       return res.status(401).json({ error: "unauthorized" });
     }
 
+    const selectCols = [
+      "id",
+      "created_at",
+      "items",
+      "totals",
+      "coupon",
+      "client_timestamp",
+      "status",
+    ].join(",");
+
     const { data, error } = await supabase
       .from("orders")
-      .select("id, created_at, items, totals, coupon, client_timestamp, status")
+      .select(selectCols)
       .order("created_at", { ascending: false })
       .limit(200);
 
     if (error) {
-      console.error("Supabase list error:", error);
       return res.status(500).json({ error: "db read failed", details: 
 error.message });
     }
 
     return res.json({ orders: data });
   } catch (err) {
-    console.error("admin/orders error:", err);
     return res.status(500).json({ error: "server error", details: 
 String(err?.message || err) });
   }
 });
 
-/* -----------------------
-   Square
------------------------- */
+/* Square client + route */
 const SQUARE_ACCESS_TOKEN = process.env.SQUARE_ACCESS_TOKEN;
 const SQUARE_LOCATION_ID = process.env.SQUARE_LOCATION_ID;
 const SQUARE_ENV = String(process.env.SQUARE_ENV || 
@@ -181,8 +170,8 @@ app.post("/square/create-checkout", async (req, res) => {
 
     const { total, currency = "USD", returnUrl, cancelUrl } = req.body || 
 {};
-
     const amount = Number(total);
+
     if (!Number.isFinite(amount) || amount <= 0) {
       return res.status(400).json({ error: "Invalid total" });
     }
@@ -218,28 +207,17 @@ app.post("/square/create-checkout", async (req, res) => {
       body?.url;
 
     if (!checkoutUrl) {
-      return res.status(500).json({ error: "No checkout URL returned", 
-details: body || null });
+      return res.status(500).json({ error: "No checkout URL returned" });
     }
 
     return res.json({ checkoutUrl });
   } catch (err) {
-    const squareErrors =
-      err?.errors || err?.result?.errors || err?.response?.body?.errors || 
-err?.cause?.errors || null;
-
-    console.error("Square create-checkout error:", squareErrors || err);
-
-    return res.status(500).json({
-      error: "Square create-checkout failed",
-      details: squareErrors || err?.message || String(err),
-    });
+    return res.status(500).json({ error: "Square create-checkout failed", 
+details: String(err?.message || err) });
   }
 });
 
-/* -----------------------
-   Start server
------------------------- */
+/* Start */
 const PORT = Number(process.env.PORT) || 10000;
 app.listen(PORT, () => {
   console.log(`✅ Backend listening on ${PORT}`);
