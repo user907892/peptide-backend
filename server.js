@@ -21,6 +21,7 @@ const allowedOrigins = [
 app.use(
   cors({
     origin(origin, cb) {
+      // allow no-origin (server-to-server, curl)
       if (!origin) return cb(null, true);
       if (allowedOrigins.includes(origin)) return cb(null, true);
       return cb(new Error(`CORS blocked for origin: ${origin}`));
@@ -81,24 +82,65 @@ app.post("/square/create-checkout", async (req, res) => {
     const cents = Math.round(amount * 100);
     const idempotencyKey = crypto.randomUUID();
 
-    const response = await squareClient.checkoutApi.createPaymentLink({
-      idempotencyKey,
-      order: {
-        locationId: SQUARE_LOCATION_ID,
-        lineItems: [
-          {
-            name: "Order Total",
-            quantity: "1",
-            basePriceMoney: { amount: cents, currency },
-          },
-        ],
-      },
-      checkoutOptions: { redirectUrl: returnUrl },
-    });
+    // ✅ New Square SDK: checkout.paymentLinks.create(...)
+    // Use BigInt for amount (common in newer SDKs), with a safe fallback.
+    let resp;
+    try {
+      resp = await squareClient.checkout.paymentLinks.create({
+        idempotencyKey,
+        order: {
+          locationId: SQUARE_LOCATION_ID,
+          lineItems: [
+            {
+              name: "Order Total",
+              quantity: "1",
+              basePriceMoney: {
+                amount: BigInt(cents),
+                currency,
+              },
+            },
+          ],
+        },
+        checkoutOptions: {
+          redirectUrl: returnUrl,
+        },
+      });
+    } catch (e) {
+      // Fallback if your installed SDK expects number instead of BigInt
+      resp = await squareClient.checkout.paymentLinks.create({
+        idempotencyKey,
+        order: {
+          locationId: SQUARE_LOCATION_ID,
+          lineItems: [
+            {
+              name: "Order Total",
+              quantity: "1",
+              basePriceMoney: {
+                amount: cents,
+                currency,
+              },
+            },
+          ],
+        },
+        checkoutOptions: {
+          redirectUrl: returnUrl,
+        },
+      });
+    }
 
-    const checkoutUrl = response?.result?.paymentLink?.url;
+    // Be defensive across SDK response shapes
+    const body = resp?.result ?? resp;
+    const checkoutUrl =
+      body?.paymentLink?.url ||
+      body?.payment_link?.url ||
+      body?.paymentLinkUrl ||
+      body?.url;
+
     if (!checkoutUrl) {
-      return res.status(500).json({ error: "No checkout URL returned" });
+      return res.status(500).json({
+        error: "No checkout URL returned",
+        details: body || null,
+      });
     }
 
     return res.json({ checkoutUrl });
