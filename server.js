@@ -1,4 +1,3 @@
-
 "use strict";
 
 const express = require("express");
@@ -36,12 +35,12 @@ app.use(
 );
 
 app.options("*", cors());
-app.use(express.json());
+app.use(express.json({ limit: "1mb" }));
 
 /* -----------------------
    Health
 ------------------------ */
-app.get("/", (req, res) => {
+app.get("/", (_req, res) => {
   res.json({ status: "ok", message: "Backend live" });
 });
 
@@ -49,8 +48,7 @@ app.get("/", (req, res) => {
    Supabase
 ------------------------ */
 const SUPABASE_URL = String(process.env.SUPABASE_URL || "").trim();
-const SUPABASE_SERVICE_ROLE_KEY = 
-String(process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
+const SUPABASE_SERVICE_ROLE_KEY = String(process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
 
 const supabase =
   SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
@@ -66,15 +64,9 @@ console.log("Supabase service key present:", !!SUPABASE_SERVICE_ROLE_KEY);
 ------------------------ */
 app.post("/orders/create", async (req, res) => {
   try {
-    if (!supabase) {
-      return res.status(500).json({ error: "Supabase not configured" });
-    }
+    if (!supabase) return res.status(500).json({ error: "Supabase not configured" });
 
-    const body = req.body || {};
-    const items = body.items;
-    const totals = body.totals;
-    const coupon = body.coupon;
-    const timestamp = body.timestamp;
+    const { items, totals, coupon, timestamp } = req.body || {};
 
     if (!Array.isArray(items) || items.length === 0) {
       return res.status(400).json({ error: "items required" });
@@ -87,8 +79,7 @@ app.post("/orders/create", async (req, res) => {
       items,
       totals,
       coupon: coupon || null,
-      client_timestamp: timestamp ? new Date(timestamp).toISOString() : 
-null,
+      client_timestamp: timestamp ? new Date(timestamp).toISOString() : null,
       status: "new",
     };
 
@@ -100,15 +91,13 @@ null,
 
     if (error) {
       console.error("Supabase insert error:", error);
-      return res.status(500).json({ error: "db insert failed", details: 
-error.message });
+      return res.status(500).json({ error: "db insert failed", details: error.message });
     }
 
     return res.json({ ok: true, order: data });
   } catch (err) {
     console.error("orders/create error:", err);
-    return res.status(500).json({ error: "server error", details: 
-String(err?.message || err) });
+    return res.status(500).json({ error: "server error", details: String(err?.message || err) });
   }
 });
 
@@ -118,9 +107,7 @@ String(err?.message || err) });
 ------------------------ */
 app.get("/admin/orders", async (req, res) => {
   try {
-    if (!supabase) {
-      return res.status(500).json({ error: "Supabase not configured" });
-    }
+    if (!supabase) return res.status(500).json({ error: "Supabase not configured" });
 
     const token = String(req.headers["x-admin-token"] || "").trim();
     const expected = String(process.env.ADMIN_TOKEN || "").trim();
@@ -129,48 +116,47 @@ app.get("/admin/orders", async (req, res) => {
       return res.status(401).json({ error: "unauthorized" });
     }
 
+    // Keep the select string on ONE LINE (your deploy failed because it was split by a newline inside quotes)
+    const selectCols = "id, created_at, items, totals, coupon, client_timestamp, status";
+
     const { data, error } = await supabase
       .from("orders")
-      .select("id, created_at, items, totals, coupon, client_timestamp, 
-status")
+      .select(selectCols)
       .order("created_at", { ascending: false })
       .limit(200);
 
     if (error) {
       console.error("Supabase list error:", error);
-      return res.status(500).json({ error: "db read failed", details: 
-error.message });
+      return res.status(500).json({ error: "db read failed", details: error.message });
     }
 
     return res.json({ orders: data });
   } catch (err) {
     console.error("admin/orders error:", err);
-    return res.status(500).json({ error: "server error", details: 
-String(err?.message || err) });
+    return res.status(500).json({ error: "server error", details: String(err?.message || err) });
   }
 });
 
 /* -----------------------
    Square
 ------------------------ */
-const SQUARE_ACCESS_TOKEN = process.env.SQUARE_ACCESS_TOKEN;
-const SQUARE_LOCATION_ID = process.env.SQUARE_LOCATION_ID;
-const SQUARE_ENV = String(process.env.SQUARE_ENV || 
-"sandbox").toLowerCase();
+const SQUARE_ACCESS_TOKEN = String(process.env.SQUARE_ACCESS_TOKEN || "").trim();
+const SQUARE_LOCATION_ID = String(process.env.SQUARE_LOCATION_ID || "").trim();
+const SQUARE_ENV_RAW = String(process.env.SQUARE_ENV || "sandbox").trim().toLowerCase();
 
-function getSquareEnvironment() {
-  return SQUARE_ENV === "production" ? SquareEnvironment.Production : 
-SquareEnvironment.Sandbox;
-}
+const SQUARE_ENV =
+  SQUARE_ENV_RAW === "production"
+    ? SquareEnvironment.Production
+    : SquareEnvironment.Sandbox;
 
-const squareClient = SQUARE_ACCESS_TOKEN
-  ? new SquareClient({
-      environment: getSquareEnvironment(),
-      token: SQUARE_ACCESS_TOKEN,
-      accessToken: SQUARE_ACCESS_TOKEN,
-      bearerAuthCredentials: { accessToken: SQUARE_ACCESS_TOKEN },
-    })
-  : null;
+// Use ONLY accessToken (the extra fields you had are not needed and can break across SDK versions)
+const squareClient =
+  SQUARE_ACCESS_TOKEN
+    ? new SquareClient({
+        environment: SQUARE_ENV,
+        accessToken: SQUARE_ACCESS_TOKEN,
+      })
+    : null;
 
 app.post("/square/create-checkout", async (req, res) => {
   try {
@@ -181,20 +167,17 @@ app.post("/square/create-checkout", async (req, res) => {
       });
     }
 
-    const { total, currency = "USD", returnUrl, cancelUrl } = req.body || 
-{};
+    const { total, currency = "USD", returnUrl, cancelUrl } = req.body || {};
 
     const amount = Number(total);
     if (!Number.isFinite(amount) || amount <= 0) {
       return res.status(400).json({ error: "Invalid total" });
     }
     if (!returnUrl || !cancelUrl) {
-      return res.status(400).json({ error: "Missing returnUrl/cancelUrl" 
-});
+      return res.status(400).json({ error: "Missing returnUrl/cancelUrl" });
     }
 
-    const centsNumber = Math.round(amount * 100);
-    const cents = BigInt(centsNumber);
+    const cents = BigInt(Math.round(amount * 100));
     const idempotencyKey = crypto.randomUUID();
 
     const resp = await squareClient.checkout.paymentLinks.create({
@@ -209,7 +192,7 @@ app.post("/square/create-checkout", async (req, res) => {
           },
         ],
       },
-      checkoutOptions: { redirectUrl: returnUrl },
+      checkoutOptions: { redirectUrl: returnUrl, cancelUrl },
     });
 
     const body = resp?.result ?? resp;
@@ -220,15 +203,13 @@ app.post("/square/create-checkout", async (req, res) => {
       body?.url;
 
     if (!checkoutUrl) {
-      return res.status(500).json({ error: "No checkout URL returned", 
-details: body || null });
+      return res.status(500).json({ error: "No checkout URL returned", details: body || null });
     }
 
     return res.json({ checkoutUrl });
   } catch (err) {
     const squareErrors =
-      err?.errors || err?.result?.errors || err?.response?.body?.errors || 
-err?.cause?.errors || null;
+      err?.errors || err?.result?.errors || err?.response?.body?.errors || err?.cause?.errors || null;
 
     console.error("Square create-checkout error:", squareErrors || err);
 
