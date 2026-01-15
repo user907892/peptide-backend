@@ -1,11 +1,11 @@
-/**
- * server.js
- * ArcticLabSupply backend (Render)
- * Stripe Checkout + Promotion Codes + PayPal Orders API + Square Hosted 
-Checkout
- *
- * Node 18+ includes global fetch (Render Node 22 does).
- */
+"use strict";
+
+/*
+server.js
+ArcticLabSupply backend (Render)
+Stripe Checkout + PayPal Orders API + Square Hosted Checkout
+Node 18+ includes global fetch. Render Node 22 is fine.
+*/
 
 const express = require("express");
 const cors = require("cors");
@@ -15,7 +15,7 @@ const { Client, Environment } = require("square");
 
 const app = express();
 
-// ✅ CORS (site + localhost) — robust preflight support
+// CORS
 app.use(
   cors({
     origin: [
@@ -33,11 +33,11 @@ app.options("*", cors());
 app.use(express.json());
 
 // =====================
-// Stripe (kept; will not crash if missing)
+// Stripe
 // =====================
 let stripe = null;
 if (!process.env.STRIPE_SECRET_KEY) {
-  console.warn("⚠️ Missing STRIPE_SECRET_KEY in environment variables.");
+  console.warn("Missing STRIPE_SECRET_KEY.");
 } else {
   stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 }
@@ -47,7 +47,7 @@ function normalizeCoupon(code) {
 }
 
 // =====================
-// PayPal Orders API config
+// PayPal
 // =====================
 const PAYPAL_CLIENT_ID = process.env.PAYPAL_CLIENT_ID;
 const PAYPAL_CLIENT_SECRET = process.env.PAYPAL_CLIENT_SECRET;
@@ -79,16 +79,15 @@ Buffer.from(`${PAYPAL_CLIENT_ID}:${PAYPAL_CLIENT_SECRET}`).toString("base64");
     console.error("PayPal token error:", data);
     throw new Error(data?.error_description || "PayPal token error");
   }
-
   return data.access_token;
 }
 
 // =====================
-// Square (Hosted Checkout via Payment Link)
+// Square
 // =====================
 let square = null;
 if (!process.env.SQUARE_ACCESS_TOKEN || !process.env.SQUARE_LOCATION_ID) {
-  console.warn("⚠️ Missing SQUARE_ACCESS_TOKEN or SQUARE_LOCATION_ID.");
+  console.warn("Missing SQUARE_ACCESS_TOKEN or SQUARE_LOCATION_ID.");
 } else {
   const env = (process.env.SQUARE_ENV || "production").toLowerCase();
   square = new Client({
@@ -106,43 +105,30 @@ app.get("/", (req, res) => {
 });
 
 // =====================
-// Square: Create Payment Link -> url
+// Square: create checkout url
 // =====================
 app.post("/square/create-checkout", async (req, res) => {
   try {
     if (!square) {
-      return res.status(500).json({
-        error: "Square not configured",
-        message: "Missing SQUARE_ACCESS_TOKEN / SQUARE_LOCATION_ID",
-      });
+      return res.status(500).json({ error: "Square not configured" });
     }
 
-    const { orderId, total, currency = "USD", successUrl, cancelUrl, items 
-= [], coupon = null } =
-      req.body;
+    const body = req.body || {};
+    const totalNum = Number(body.total);
+    const currency = body.currency || "USD";
+    const successUrl = body.successUrl;
 
-    const value = Number(total);
-    if (!Number.isFinite(value) || value <= 0) {
+    if (!Number.isFinite(totalNum) || totalNum <= 0) {
       return res.status(400).json({ error: "Invalid total" });
     }
     if (!successUrl) {
       return res.status(400).json({ error: "Missing successUrl" });
-    }
-    if (!cancelUrl) {
-      // not required for Square Payment Links, but your frontend sends it
-      console.warn("Square checkout: cancelUrl missing (not required).");
     }
 
     const idempotencyKey =
       typeof crypto.randomUUID === "function"
         ? crypto.randomUUID()
         : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-
-    const noteParts = [];
-    if (orderId) noteParts.push(`Order: ${orderId}`);
-    if (coupon) noteParts.push(`Coupon: ${coupon}`);
-    if (Array.isArray(items) && items.length) noteParts.push(`Items: 
-${items.length}`);
 
     const { result } = await square.checkoutApi.createPaymentLink({
       idempotencyKey,
@@ -152,7 +138,8 @@ ${items.length}`);
           {
             name: "Arctic Labs Order",
             quantity: "1",
-            basePriceMoney: { amount: Math.round(value * 100), currency },
+            basePriceMoney: { amount: Math.round(totalNum * 100), currency 
+},
           },
         ],
       },
@@ -161,34 +148,32 @@ ${items.length}`);
         askForShippingAddress: true,
         merchantSupportEmail: "support@arcticlabsupply.com",
       },
-      description: noteParts.join(" | ") || "Arctic Labs Supply checkout",
+      description: "Arctic Labs Supply checkout",
     });
 
-    const url = result?.paymentLink?.url;
+    const url = result && result.paymentLink && result.paymentLink.url;
     if (!url) {
-      return res.status(500).json({ error: "Square did not return a 
-checkout URL" });
+      return res.status(500).json({ error: "Square did not return checkout 
+URL" });
     }
 
     return res.json({ url });
   } catch (err) {
-    console.error("Square create-checkout server error:", err);
+    console.error("Square create-checkout error:", err);
     return res.status(500).json({ error: err.message || "Server error" });
   }
 });
 
 // =====================
-// PayPal: Create Order -> approveUrl
+// PayPal: Create Order
 // =====================
 app.post("/paypal/create-order", async (req, res) => {
   try {
-    const { total, currency = "USD", returnUrl, cancelUrl } = req.body;
+    const { total, currency = "USD", returnUrl, cancelUrl } = req.body || 
+{};
 
     if (!PAYPAL_CLIENT_ID || !PAYPAL_CLIENT_SECRET) {
-      return res.status(500).json({
-        error: "PayPal not configured",
-        message: "Missing PAYPAL_CLIENT_ID / PAYPAL_CLIENT_SECRET",
-      });
+      return res.status(500).json({ error: "PayPal not configured" });
     }
 
     const value = Number(total);
@@ -205,10 +190,8 @@ app.post("/paypal/create-order", async (req, res) => {
     const payload = {
       intent: "CAPTURE",
       purchase_units: [
-        {
-          amount: { currency_code: currency, value: value.toFixed(2) },
-          description: "Laboratory research materials",
-        },
+        { amount: { currency_code: currency, value: value.toFixed(2) }, 
+description: "Order" },
       ],
       application_context: {
         brand_name: "Arctic Labs Supply",
@@ -220,10 +203,8 @@ app.post("/paypal/create-order", async (req, res) => {
 
     const ppResp = await fetch(`${PAYPAL_BASE}/v2/checkout/orders`, {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
+      headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": 
+"application/json" },
       body: JSON.stringify(payload),
     });
 
@@ -248,7 +229,7 @@ data });
 // =====================
 app.post("/paypal/capture-order", async (req, res) => {
   try {
-    const { orderID } = req.body;
+    const { orderID } = req.body || {};
     if (!orderID) return res.status(400).json({ error: "Missing orderID" 
 });
 
@@ -257,10 +238,8 @@ app.post("/paypal/capture-order", async (req, res) => {
     const ppResp = await 
 fetch(`${PAYPAL_BASE}/v2/checkout/orders/${orderID}/capture`, {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
+      headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": 
+"application/json" },
     });
 
     const data = await ppResp.json();
@@ -283,59 +262,42 @@ fetch(`${PAYPAL_BASE}/v2/checkout/orders/${orderID}/capture`, {
 app.post("/create-checkout-session", async (req, res) => {
   try {
     if (!stripe) {
-      return res.status(500).json({
-        error: "Stripe is not configured on the server",
-        message: "Missing STRIPE_SECRET_KEY",
-      });
+      return res.status(500).json({ error: "Stripe not configured", 
+message: "Missing STRIPE_SECRET_KEY" });
     }
 
-    const { items, shipping, coupon } = req.body;
-
+    const { items, shipping, coupon } = req.body || {};
     if (!Array.isArray(items) || items.length === 0) {
       return res.status(400).json({ error: "No items provided" });
     }
 
     const line_items = [];
-
     for (const item of items) {
       if (!item || !item.id) continue;
-      line_items.push({
-        price: item.id,
-        quantity: Number(item.quantity) > 0 ? Number(item.quantity) : 1,
-      });
+      line_items.push({ price: item.id, quantity: Number(item.quantity) > 
+0 ? Number(item.quantity) : 1 });
     }
 
     if (typeof shipping === "number" && shipping > 0) {
       line_items.push({
-        price_data: {
-          currency: "usd",
-          product_data: { name: "Shipping" },
-          unit_amount: Math.round(shipping * 100),
-        },
+        price_data: { currency: "usd", product_data: { name: "Shipping" }, 
+unit_amount: Math.round(shipping * 100) },
         quantity: 1,
       });
     }
 
-    if (line_items.length === 0) {
-      return res.status(400).json({ error: "No valid line items" });
-    }
+    if (line_items.length === 0) return res.status(400).json({ error: "No 
+valid line items" });
 
     const normalizedCoupon = normalizeCoupon(coupon);
-
     let discounts;
     let appliedPromotionCodeId = null;
 
     if (normalizedCoupon) {
-      const promos = await stripe.promotionCodes.list({
-        code: normalizedCoupon,
-        active: true,
-        limit: 1,
-      });
-
-      if (!promos.data.length) {
-        return res.status(400).json({ error: "Invalid coupon code" });
-      }
-
+      const promos = await stripe.promotionCodes.list({ code: 
+normalizedCoupon, active: true, limit: 1 });
+      if (!promos.data.length) return res.status(400).json({ error: 
+"Invalid coupon code" });
       appliedPromotionCodeId = promos.data[0].id;
       discounts = [{ promotion_code: appliedPromotionCodeId }];
     }
@@ -358,12 +320,9 @@ app.post("/create-checkout-session", async (req, res) => {
 
     return res.json({ url: session.url });
   } catch (err) {
-    console.error("Error creating checkout session:", err?.message || 
-err);
-    return res.status(500).json({
-      error: "Failed to create checkout session",
-      message: err?.message || "unknown error",
-    });
+    console.error("Stripe create-checkout-session error:", err);
+    return res.status(500).json({ error: "Failed to create checkout 
+session", message: err?.message || "unknown error" });
   }
 });
 
@@ -373,25 +332,21 @@ err);
 app.get("/stripe/session", async (req, res) => {
   try {
     if (!stripe) {
-      return res.status(500).json({
-        error: "Stripe is not configured on the server",
-        message: "Missing STRIPE_SECRET_KEY",
-      });
+      return res.status(500).json({ error: "Stripe not configured", 
+message: "Missing STRIPE_SECRET_KEY" });
     }
 
-    const { session_id } = req.query;
-    if (!session_id) {
-      return res.status(400).json({ error: "Missing session_id" });
-    }
+    const { session_id } = req.query || {};
+    if (!session_id) return res.status(400).json({ error: "Missing 
+session_id" });
 
     const session = await stripe.checkout.sessions.retrieve(session_id, {
       expand: ["payment_intent", "line_items.data.price.product"],
     });
 
     const transaction_id =
-      (typeof session.payment_intent === "string"
-        ? session.payment_intent
-        : session.payment_intent?.id) || session.id;
+      (typeof session.payment_intent === "string" ? session.payment_intent 
+: session.payment_intent?.id) || session.id;
 
     const value = (session.amount_total || 0) / 100;
     const currency = (session.currency || "usd").toUpperCase();
@@ -400,12 +355,10 @@ app.get("/stripe/session", async (req, res) => {
       session.line_items?.data?.map((li) => {
         const price = li.price;
         const product = price?.product;
-
         return {
           item_id: (typeof product === "object" && product?.id) || 
 price?.id || "unknown",
-          item_name:
-            (typeof product === "object" && product?.name) || 
+          item_name: (typeof product === "object" && product?.name) || 
 li.description || "Item",
           price: (price?.unit_amount || 0) / 100,
           quantity: li.quantity || 1,
@@ -422,11 +375,9 @@ li.description || "Item",
       promotion_code_id: session.metadata?.promotion_code_id || "",
     });
   } catch (err) {
-    console.error("Error retrieving session:", err?.message || err);
-    return res.status(500).json({
-      error: "Failed to retrieve session",
-      message: err?.message || "unknown error",
-    });
+    console.error("Stripe session error:", err);
+    return res.status(500).json({ error: "Failed to retrieve session", 
+message: err?.message || "unknown error" });
   }
 });
 
