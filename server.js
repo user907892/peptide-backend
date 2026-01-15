@@ -1,5 +1,6 @@
 // server.js
-// ArcticLabSupply backend (Render) — Stripe Checkout + Promotion Codes + PayPal Orders API
+// ArcticLabSupply backend (Render) — Stripe Checkout + Promotion Codes + 
+PayPal Orders API
 
 const express = require("express");
 const cors = require("cors");
@@ -7,19 +8,22 @@ const Stripe = require("stripe");
 
 const app = express();
 
-// ✅ CORS (site + localhost)
-const corsOptions = {
-  origin: [
-    "https://arcticlabsupply.com",
-    "https://www.arcticlabsupply.com",
-    "http://localhost:5173",
-    "http://localhost:3000",
-  ],
-  methods: ["GET", "POST", "OPTIONS"],
-};
+// ✅ CORS (site + localhost) — robust preflight support
+app.use(
+  cors({
+    origin: [
+      "https://arcticlabsupply.com",
+      "https://www.arcticlabsupply.com",
+      "http://localhost:5173",
+      "http://localhost:3000",
+    ],
+    methods: ["GET", "POST", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  })
+);
+// ✅ Handle preflight requests
+app.options("*", cors());
 
-app.use(cors(corsOptions));
-app.options("*", cors(corsOptions));
 app.use(express.json());
 
 // =====================
@@ -235,7 +239,6 @@ app.post("/create-checkout-session", async (req, res) => {
       return res.status(400).json({ error: "No valid line items" });
     }
 
-    // ✅ Promotion code lookup by customer-entered code (SAVE10 / TAKE10)
     const normalizedCoupon = normalizeCoupon(coupon);
 
     let discounts;
@@ -260,14 +263,12 @@ app.post("/create-checkout-session", async (req, res) => {
       mode: "payment",
       line_items,
       discounts: discounts || undefined,
-
-      success_url: 
+      success_url:
+        
 "https://arcticlabsupply.com/success?session_id={CHECKOUT_SESSION_ID}",
       cancel_url: "https://arcticlabsupply.com/cart",
-
       shipping_address_collection: { allowed_countries: ["US"] },
       phone_number_collection: { enabled: true },
-
       metadata: {
         source: "arcticlabsupply-cart",
         coupon_code: normalizedCoupon || "",
@@ -354,3 +355,4 @@ const PORT = process.env.PORT || 4242;
 app.listen(PORT, () => {
   console.log(`ArcticLabSupply backend listening on port ${PORT}`);
 });
+
