@@ -1,4 +1,3 @@
-\
 "use strict";
 
 const express = require("express");
@@ -43,9 +42,7 @@ const supabase =
 app.post("/orders/create", async (req, res) => {
   try {
     if (!supabase) {
-      return res
-        .status(500)
-        .json({ ok: false, message: "Supabase not configured" });
+      return res.status(500).json({ ok: false, message: "Supabase not configured" });
     }
 
     const body = req.body || {};
@@ -70,11 +67,7 @@ app.post("/orders/create", async (req, res) => {
       payment_status: "pending",
     };
 
-    const { data, error } = await supabase
-      .from("orders")
-      .insert([payload])
-      .select("*")
-      .single();
+    const { data, error } = await supabase.from("orders").insert([payload]).select("*").single();
 
     if (error) {
       console.error("orders/create insert error:", error);
@@ -103,9 +96,7 @@ app.post("/orders/create", async (req, res) => {
 app.post("/orders/confirm", async (req, res) => {
   try {
     if (!supabase) {
-      return res
-        .status(500)
-        .json({ ok: false, message: "Supabase not configured" });
+      return res.status(500).json({ ok: false, message: "Supabase not configured" });
     }
 
     const { orderId, transactionId, pendingOrder } = req.body || {};
