@@ -1,4 +1,4 @@
-"use strict";=
+"use strict";
 
 /*
 server.js
@@ -12,11 +12,12 @@ const cors = require("cors");
 const Stripe = require("stripe");
 const crypto = require("crypto");
 
-// ✅ IMPORTANT: load Square in a way that works across SDK versions
+// Load Square SDK in a version-tolerant way
 const Square = require("square");
-const SquareClient = Square.Client || Square?.default?.Client;
-const SquareEnvironment = Square.Environment || 
-Square?.default?.Environment;
+const SquareClient = Square.Client || (Square.default && 
+Square.default.Client);
+const SquareEnvironment =
+  Square.Environment || (Square.default && Square.default.Environment);
 
 const app = express();
 
@@ -45,11 +46,7 @@ let stripe = null;
 if (process.env.STRIPE_SECRET_KEY) {
   stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 } else {
-  console.warn("⚠️ STRIPE_SECRET_KEY not set");
-}
-
-function normalizeCoupon(code) {
-  return String(code || "").trim().toUpperCase();
+  console.warn("STRIPE_SECRET_KEY not set");
 }
 
 /* =======================
@@ -57,7 +54,8 @@ function normalizeCoupon(code) {
 ======================= */
 const PAYPAL_CLIENT_ID = process.env.PAYPAL_CLIENT_ID;
 const PAYPAL_CLIENT_SECRET = process.env.PAYPAL_CLIENT_SECRET;
-const PAYPAL_ENV = (process.env.PAYPAL_ENV || "sandbox").toLowerCase();
+const PAYPAL_ENV = String(process.env.PAYPAL_ENV || 
+"sandbox").toLowerCase();
 
 const PAYPAL_BASE =
   PAYPAL_ENV === "live"
@@ -69,8 +67,9 @@ async function getPayPalAccessToken() {
     throw new Error("PayPal env vars missing");
   }
 
-  const auth = 
-Buffer.from(`${PAYPAL_CLIENT_ID}:${PAYPAL_CLIENT_SECRET}`).toString("base64");
+  const auth = Buffer.from(
+    `${PAYPAL_CLIENT_ID}:${PAYPAL_CLIENT_SECRET}`
+  ).toString("base64");
 
   const resp = await fetch(`${PAYPAL_BASE}/v1/oauth2/token`, {
     method: "POST",
@@ -91,29 +90,36 @@ Buffer.from(`${PAYPAL_CLIENT_ID}:${PAYPAL_CLIENT_SECRET}`).toString("base64");
 ======================= */
 let square = null;
 
-if (process.env.SQUARE_ACCESS_TOKEN && process.env.SQUARE_LOCATION_ID) {
-  if (!SquareClient || !SquareEnvironment) {
-    // If the SDK export shape changed, fail gracefully (don’t crash deploy)
-    console.warn("⚠️ Square SDK loaded but missing Client/Environment 
-exports. Check square package version.");
-  } else {
-    const isSandbox = (process.env.SQUARE_ENV || 
-"production").toLowerCase() === "sandbox";
-
-    square = new SquareClient({
-      accessToken: process.env.SQUARE_ACCESS_TOKEN,
-      environment: isSandbox ? SquareEnvironment.Sandbox : 
-SquareEnvironment.Production,
-    });
+function initSquare() {
+  if (!process.env.SQUARE_ACCESS_TOKEN || !process.env.SQUARE_LOCATION_ID) 
+{
+    console.warn("Square env vars not set");
+    return null;
   }
-} else {
-  console.warn("⚠️ Square env vars not set");
+
+  if (!SquareClient || !SquareEnvironment) {
+    console.warn("Square SDK missing Client/Environment exports");
+    return null;
+  }
+
+  const env = String(process.env.SQUARE_ENV || 
+"production").toLowerCase();
+  const isSandbox = env === "sandbox";
+
+  return new SquareClient({
+    accessToken: process.env.SQUARE_ACCESS_TOKEN,
+    environment: isSandbox
+      ? SquareEnvironment.Sandbox
+      : SquareEnvironment.Production,
+  });
 }
+
+square = initSquare();
 
 /* =======================
    Health
 ======================= */
-app.get("/", (_, res) => {
+app.get("/", (req, res) => {
   res.json({ status: "ok", service: "arcticlabsupply-backend" });
 });
 
@@ -127,7 +133,7 @@ app.post("/square/create-checkout", async (req, res) => {
     }
 
     const total = Number(req.body.total);
-    const successUrl = req.body.successUrl;
+    const successUrl = String(req.body.successUrl || "");
 
     if (!Number.isFinite(total) || total <= 0) {
       return res.status(400).json({ error: "Invalid total" });
@@ -136,7 +142,10 @@ app.post("/square/create-checkout", async (req, res) => {
       return res.status(400).json({ error: "Missing successUrl" });
     }
 
-    const idempotencyKey = crypto.randomUUID();
+    const idempotencyKey =
+      typeof crypto.randomUUID === "function"
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
     const { result } = await square.checkoutApi.createPaymentLink({
       idempotencyKey,
@@ -146,8 +155,10 @@ app.post("/square/create-checkout", async (req, res) => {
           {
             name: "Arctic Labs Order",
             quantity: "1",
-            basePriceMoney: { amount: Math.round(total * 100), currency: 
-"USD" },
+            basePriceMoney: {
+              amount: Math.round(total * 100),
+              currency: "USD",
+            },
           },
         ],
       },
@@ -157,10 +168,9 @@ app.post("/square/create-checkout", async (req, res) => {
       },
     });
 
-    const url = result?.paymentLink?.url;
+    const url = result && result.paymentLink && result.paymentLink.url;
     if (!url) {
-      return res.status(500).json({ error: "Square did not return checkout 
-URL" });
+      return res.status(500).json({ error: "Square did not return URL" });
     }
 
     return res.json({ url });
@@ -176,8 +186,8 @@ URL" });
 app.post("/paypal/create-order", async (req, res) => {
   try {
     const total = Number(req.body.total);
-    const returnUrl = req.body.returnUrl;
-    const cancelUrl = req.body.cancelUrl;
+    const returnUrl = String(req.body.returnUrl || "");
+    const cancelUrl = String(req.body.cancelUrl || "");
 
     if (!Number.isFinite(total) || total <= 0) {
       return res.status(400).json({ error: "Invalid total" });
@@ -190,12 +200,15 @@ app.post("/paypal/create-order", async (req, res) => {
 
     const resp = await fetch(`${PAYPAL_BASE}/v2/checkout/orders`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": 
-"application/json" },
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
       body: JSON.stringify({
         intent: "CAPTURE",
-        purchase_units: [{ amount: { currency_code: "USD", value: 
-total.toFixed(2) } }],
+        purchase_units: [
+          { amount: { currency_code: "USD", value: total.toFixed(2) } },
+        ],
         application_context: {
           brand_name: "Arctic Labs Supply",
           user_action: "PAY_NOW",
@@ -208,8 +221,10 @@ total.toFixed(2) } }],
     const data = await resp.json();
     if (!resp.ok) throw new Error("PayPal create failed");
 
-    const approve = data.links?.find((l) => l.rel === "approve")?.href;
-    return res.json({ orderID: data.id, approveUrl: approve });
+    const approveUrl =
+      (data.links || []).find((l) => l.rel === "approve")?.href || null;
+
+    return res.json({ orderID: data.id, approveUrl });
   } catch (err) {
     console.error("PayPal error:", err);
     return res.status(500).json({ error: "PayPal checkout failed" });
@@ -225,8 +240,8 @@ app.post("/create-checkout-session", async (req, res) => {
       return res.status(500).json({ error: "Stripe not configured" });
     }
 
-    const items = req.body.items || [];
-    if (!items.length) {
+    const items = Array.isArray(req.body.items) ? req.body.items : [];
+    if (items.length === 0) {
       return res.status(400).json({ error: "No items" });
     }
 
@@ -238,7 +253,8 @@ app.post("/create-checkout-session", async (req, res) => {
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
       line_items,
-      success_url: 
+      success_url:
+        
 "https://arcticlabsupply.com/success?session_id={CHECKOUT_SESSION_ID}",
       cancel_url: "https://arcticlabsupply.com/cart",
     });
@@ -255,6 +271,6 @@ app.post("/create-checkout-session", async (req, res) => {
 ======================= */
 const PORT = process.env.PORT || 4242;
 app.listen(PORT, () => {
-  console.log(`✅ Backend running on port ${PORT}`);
+  console.log(`Backend running on port ${PORT}`);
 });
 
