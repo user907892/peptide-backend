@@ -8,8 +8,7 @@ const dotenv = require("dotenv");
 const { createClient } = require("@supabase/supabase-js");
 const { SquareClient, SquareEnvironment } = require("square");
 
-// ✅ Load local .env if present (Render uses Environment Variables 
-automatically)
+// ✅ Load local .env if present (Render uses Environment Variables automatically)
 dotenv.config();
 
 const app = express();
