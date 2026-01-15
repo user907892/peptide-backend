@@ -21,7 +21,6 @@ const allowedOrigins = [
 app.use(
   cors({
     origin(origin, cb) {
-      // allow no-origin (server-to-server, curl)
       if (!origin) return cb(null, true);
       if (allowedOrigins.includes(origin)) return cb(null, true);
       return cb(new Error(`CORS blocked for origin: ${origin}`));
@@ -79,55 +78,32 @@ app.post("/square/create-checkout", async (req, res) => {
 });
     }
 
-    const cents = Math.round(amount * 100);
+    // convert dollars -> cents -> BigInt
+    const centsNumber = Math.round(amount * 100);
+    const cents = BigInt(centsNumber);
+
     const idempotencyKey = crypto.randomUUID();
 
-    // Create payment link via new SDK
-    let resp;
-
-    // Try BigInt first (some SDKs prefer it)
-    try {
-      resp = await squareClient.checkout.paymentLinks.create({
-        idempotencyKey,
-        order: {
-          locationId: SQUARE_LOCATION_ID,
-          lineItems: [
-            {
-              name: "Order Total",
-              quantity: "1",
-              basePriceMoney: {
-                amount: BigInt(cents),
-                currency,
-              },
+    // ✅ New Square SDK: checkout.paymentLinks.create(...)
+    const resp = await squareClient.checkout.paymentLinks.create({
+      idempotencyKey,
+      order: {
+        locationId: SQUARE_LOCATION_ID,
+        lineItems: [
+          {
+            name: "Order Total",
+            quantity: "1",
+            basePriceMoney: {
+              amount: cents, // ✅ BigInt required
+              currency,
             },
-          ],
-        },
-        checkoutOptions: {
-          redirectUrl: returnUrl,
-        },
-      });
-    } catch (e) {
-      // Fallback to number if BigInt isn't accepted
-      resp = await squareClient.checkout.paymentLinks.create({
-        idempotencyKey,
-        order: {
-          locationId: SQUARE_LOCATION_ID,
-          lineItems: [
-            {
-              name: "Order Total",
-              quantity: "1",
-              basePriceMoney: {
-                amount: cents,
-                currency,
-              },
-            },
-          ],
-        },
-        checkoutOptions: {
-          redirectUrl: returnUrl,
-        },
-      });
-    }
+          },
+        ],
+      },
+      checkoutOptions: {
+        redirectUrl: returnUrl,
+      },
+    });
 
     const body = resp?.result ?? resp;
 
@@ -146,7 +122,6 @@ app.post("/square/create-checkout", async (req, res) => {
 
     return res.json({ checkoutUrl });
   } catch (err) {
-    // Pull Square errors from common shapes
     const squareErrors =
       err?.errors ||
       err?.result?.errors ||
