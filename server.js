@@ -4,8 +4,13 @@
 const express = require("express");
 const cors = require("cors");
 const crypto = require("crypto");
+const dotenv = require("dotenv");
+const { createClient } = require("@supabase/supabase-js");
 
 const { SquareClient, SquareEnvironment } = require("square");
+
+// ✅ load env from a file literally named: "env"
+dotenv.config({ path: "env" });
 
 const app = express();
 
@@ -27,7 +32,8 @@ app.use(
       return cb(new Error(`CORS blocked for origin: ${origin}`));
     },
     methods: ["GET", "POST", "OPTIONS"],
-    allowedHeaders: ["Content-Type"],
+    // ✅ allow admin token header too
+    allowedHeaders: ["Content-Type", "x-admin-token"],
   })
 );
 
@@ -39,7 +45,107 @@ app.get("/", (req, res) => {
   res.json({ status: "ok", message: "Backend live" });
 });
 
-// ---- Square config ----
+// =========================
+// ✅ SUPABASE (Order Hub)
+// =========================
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const ADMIN_TOKEN = process.env.ADMIN_TOKEN;
+
+const supabase =
+  SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
+    ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+    : null;
+
+console.log("Supabase URL present:", !!SUPABASE_URL);
+console.log("Supabase service key present:", !!SUPABASE_SERVICE_ROLE_KEY);
+
+// ✅ 1) CREATE ORDER (customer checkout hits this)
+app.post("/orders/create", async (req, res) => {
+  try {
+    if (!supabase) {
+      return res.status(500).json({
+        error: "Supabase not configured",
+        message: "Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY",
+      });
+    }
+
+    const { items, totals, coupon, timestamp } = req.body || {};
+
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ error: "items required" });
+    }
+    if (!totals || typeof totals !== "object") {
+      return res.status(400).json({ error: "totals required" });
+    }
+
+    const { data, error } = await supabase
+      .from("orders")
+      .insert([
+        {
+          items,
+          totals,
+          coupon: coupon || null,
+          client_timestamp: timestamp ? new Date(timestamp).toISOString() 
+: null,
+          status: "new",
+        },
+      ])
+      .select("id, created_at")
+      .single();
+
+    if (error) {
+      console.error("Supabase insert error:", error);
+      return res.status(500).json({ error: "db insert failed", details: 
+error.message });
+    }
+
+    return res.json({ ok: true, order: data });
+  } catch (err) {
+    console.error("orders/create error:", err);
+    return res.status(500).json({ error: "server error" });
+  }
+});
+
+// ✅ 2) ADMIN LIST ORDERS
+app.get("/admin/orders", async (req, res) => {
+  try {
+    if (!supabase) {
+      return res.status(500).json({
+        error: "Supabase not configured",
+        message: "Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY",
+      });
+    }
+
+    // Simple protection
+    const token = req.headers["x-admin-token"];
+    if (!ADMIN_TOKEN || token !== ADMIN_TOKEN) {
+      return res.status(401).json({ error: "unauthorized" });
+    }
+
+    const { data, error } = await supabase
+      .from("orders")
+      .select("id, created_at, items, totals, coupon, client_timestamp, 
+status")
+      .order("created_at", { ascending: false })
+      .limit(200);
+
+    if (error) {
+      console.error("Supabase list error:", error);
+      return res.status(500).json({ error: "db read failed", details: 
+error.message });
+    }
+
+    return res.json({ orders: data });
+  } catch (err) {
+    console.error("admin/orders error:", err);
+    return res.status(500).json({ error: "server error" });
+  }
+});
+
+// =========================
+// ✅ SQUARE (your existing)
+// =========================
 const SQUARE_ACCESS_TOKEN = process.env.SQUARE_ACCESS_TOKEN;
 const SQUARE_LOCATION_ID = process.env.SQUARE_LOCATION_ID;
 const SQUARE_ENV = (process.env.SQUARE_ENV || "sandbox").toLowerCase();
@@ -92,7 +198,7 @@ app.post("/square/create-checkout", async (req, res) => {
 });
     }
 
-    // dollars -> cents -> BigInt (your SDK expects bigint)
+    // dollars -> cents -> BigInt
     const centsNumber = Math.round(amount * 100);
     const cents = BigInt(centsNumber);
 
@@ -106,16 +212,11 @@ app.post("/square/create-checkout", async (req, res) => {
           {
             name: "Order Total",
             quantity: "1",
-            basePriceMoney: {
-              amount: cents,
-              currency,
-            },
+            basePriceMoney: { amount: cents, currency },
           },
         ],
       },
-      checkoutOptions: {
-        redirectUrl: returnUrl,
-      },
+      checkoutOptions: { redirectUrl: returnUrl },
     });
 
     const body = resp?.result ?? resp;

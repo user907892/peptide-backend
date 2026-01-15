@@ -1,0 +1,5 @@
+SUPABASE_URL=your_supabase_project_url
+SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
+ADMIN_TOKEN=make-a-long-random-string
+PORT=3001
+
