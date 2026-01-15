@@ -1,276 +1,136 @@
-"use strict";
-
-/*
-server.js
-ArcticLabSupply backend (Render)
-Stripe Checkout + PayPal Orders API + Square Hosted Checkout
-Node 18+ includes global fetch. Render Node 22 is fine.
-*/
-
+// server.js
 const express = require("express");
 const cors = require("cors");
-const Stripe = require("stripe");
 const crypto = require("crypto");
 
-// Load Square SDK in a version-tolerant way
-const Square = require("square");
-const SquareClient = Square.Client || (Square.default && 
-Square.default.Client);
-const SquareEnvironment =
-  Square.Environment || (Square.default && Square.default.Environment);
+const { Client, Environment } = require("square");
 
 const app = express();
 
-/* =======================
-   CORS
-======================= */
+// ---- CORS ----
+const allowedOrigins = [
+  "https://arcticlabsupply.com",
+  "https://www.arcticlabsupply.com",
+  "http://localhost:5173",
+  "http://localhost:3000",
+  process.env.ORIGIN, // optional
+].filter(Boolean);
+
 app.use(
   cors({
-    origin: [
-      "https://arcticlabsupply.com",
-      "https://www.arcticlabsupply.com",
-      "http://localhost:5173",
-      "http://localhost:3000",
-    ],
+    origin: function (origin, cb) {
+      // allow no-origin (server-to-server, curl)
+      if (!origin) return cb(null, true);
+      if (allowedOrigins.includes(origin)) return cb(null, true);
+      return cb(new Error(`CORS blocked for origin: ${origin}`));
+    },
     methods: ["GET", "POST", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
+    allowedHeaders: ["Content-Type"],
   })
 );
+
 app.options("*", cors());
 app.use(express.json());
 
-/* =======================
-   Stripe
-======================= */
-let stripe = null;
-if (process.env.STRIPE_SECRET_KEY) {
-  stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
-} else {
-  console.warn("STRIPE_SECRET_KEY not set");
-}
-
-/* =======================
-   PayPal
-======================= */
-const PAYPAL_CLIENT_ID = process.env.PAYPAL_CLIENT_ID;
-const PAYPAL_CLIENT_SECRET = process.env.PAYPAL_CLIENT_SECRET;
-const PAYPAL_ENV = String(process.env.PAYPAL_ENV || 
-"sandbox").toLowerCase();
-
-const PAYPAL_BASE =
-  PAYPAL_ENV === "live"
-    ? "https://api-m.paypal.com"
-    : "https://api-m.sandbox.paypal.com";
-
-async function getPayPalAccessToken() {
-  if (!PAYPAL_CLIENT_ID || !PAYPAL_CLIENT_SECRET) {
-    throw new Error("PayPal env vars missing");
-  }
-
-  const auth = Buffer.from(
-    `${PAYPAL_CLIENT_ID}:${PAYPAL_CLIENT_SECRET}`
-  ).toString("base64");
-
-  const resp = await fetch(`${PAYPAL_BASE}/v1/oauth2/token`, {
-    method: "POST",
-    headers: {
-      Authorization: `Basic ${auth}`,
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
-    body: "grant_type=client_credentials",
-  });
-
-  const data = await resp.json();
-  if (!resp.ok) throw new Error("PayPal auth failed");
-  return data.access_token;
-}
-
-/* =======================
-   Square
-======================= */
-let square = null;
-
-function initSquare() {
-  if (!process.env.SQUARE_ACCESS_TOKEN || !process.env.SQUARE_LOCATION_ID) 
-{
-    console.warn("Square env vars not set");
-    return null;
-  }
-
-  if (!SquareClient || !SquareEnvironment) {
-    console.warn("Square SDK missing Client/Environment exports");
-    return null;
-  }
-
-  const env = String(process.env.SQUARE_ENV || 
-"production").toLowerCase();
-  const isSandbox = env === "sandbox";
-
-  return new SquareClient({
-    accessToken: process.env.SQUARE_ACCESS_TOKEN,
-    environment: isSandbox
-      ? SquareEnvironment.Sandbox
-      : SquareEnvironment.Production,
-  });
-}
-
-square = initSquare();
-
-/* =======================
-   Health
-======================= */
+// ---- Health ----
 app.get("/", (req, res) => {
-  res.json({ status: "ok", service: "arcticlabsupply-backend" });
+  res.json({ status: "ok", message: "Backend live" });
 });
 
-/* =======================
-   Square: Create Checkout
-======================= */
+// ---- Square config ----
+const SQUARE_ACCESS_TOKEN = process.env.SQUARE_ACCESS_TOKEN;
+const SQUARE_LOCATION_ID = process.env.SQUARE_LOCATION_ID;
+const SQUARE_ENV = (process.env.SQUARE_ENV || "sandbox").toLowerCase();
+
+function getSquareEnvironment() {
+  return SQUARE_ENV === "production" ? Environment.Production : 
+Environment.Sandbox;
+}
+
+const squareClient =
+  SQUARE_ACCESS_TOKEN
+    ? new Client({
+        accessToken: SQUARE_ACCESS_TOKEN,
+        environment: getSquareEnvironment(),
+      })
+    : null;
+
+/**
+ * POST /square/create-checkout
+ * Body:
+ * {
+ *   total: "19.94",           // string or number
+ *   currency: "USD",          // optional
+ *   returnUrl: "https://.../square-success",
+ *   cancelUrl: "https://.../cart"
+ * }
+ */
 app.post("/square/create-checkout", async (req, res) => {
   try {
-    if (!square) {
-      return res.status(500).json({ error: "Square not configured" });
+    if (!squareClient || !SQUARE_LOCATION_ID) {
+      return res.status(500).json({
+        error: "Square not configured",
+        message: "Missing SQUARE_ACCESS_TOKEN or SQUARE_LOCATION_ID",
+      });
     }
 
-    const total = Number(req.body.total);
-    const successUrl = String(req.body.successUrl || "");
+    const { total, currency = "USD", returnUrl, cancelUrl } = req.body || 
+{};
 
-    if (!Number.isFinite(total) || total <= 0) {
+    const amount = Number(total);
+    if (!Number.isFinite(amount) || amount <= 0) {
       return res.status(400).json({ error: "Invalid total" });
     }
-    if (!successUrl) {
-      return res.status(400).json({ error: "Missing successUrl" });
+
+    if (!returnUrl || !cancelUrl) {
+      return res.status(400).json({ error: "Missing returnUrl/cancelUrl" 
+});
     }
 
-    const idempotencyKey =
-      typeof crypto.randomUUID === "function"
-        ? crypto.randomUUID()
-        : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    // Square uses smallest currency unit (cents)
+    const amountMoney = {
+      amount: Math.round(amount * 100),
+      currency,
+    };
 
-    const { result } = await square.checkoutApi.createPaymentLink({
+    const idempotencyKey = crypto.randomUUID();
+
+    const response = await squareClient.checkoutApi.createPaymentLink({
       idempotencyKey,
       order: {
-        locationId: process.env.SQUARE_LOCATION_ID,
+        locationId: SQUARE_LOCATION_ID,
         lineItems: [
           {
-            name: "Arctic Labs Order",
+            name: "Order Total",
             quantity: "1",
-            basePriceMoney: {
-              amount: Math.round(total * 100),
-              currency: "USD",
-            },
+            basePriceMoney: amountMoney,
           },
         ],
       },
       checkoutOptions: {
-        redirectUrl: successUrl,
-        askForShippingAddress: true,
+        redirectUrl: returnUrl,
+        // This is a "cancel" path UX: Square doesn’t always use it 
+directly,
+        // so we handle cancel by linking users back to cart from the UI.
       },
+      prePopulatedData: {},
     });
 
-    const url = result && result.paymentLink && result.paymentLink.url;
+    const url = response?.result?.paymentLink?.url;
     if (!url) {
-      return res.status(500).json({ error: "Square did not return URL" });
+      return res.status(500).json({ error: "No checkout URL returned" });
     }
 
-    return res.json({ url });
+    return res.json({ checkoutUrl: url });
   } catch (err) {
-    console.error("Square error:", err);
-    return res.status(500).json({ error: "Square checkout failed" });
-  }
-});
-
-/* =======================
-   PayPal: Create Order
-======================= */
-app.post("/paypal/create-order", async (req, res) => {
-  try {
-    const total = Number(req.body.total);
-    const returnUrl = String(req.body.returnUrl || "");
-    const cancelUrl = String(req.body.cancelUrl || "");
-
-    if (!Number.isFinite(total) || total <= 0) {
-      return res.status(400).json({ error: "Invalid total" });
-    }
-    if (!returnUrl || !cancelUrl) {
-      return res.status(400).json({ error: "Missing URLs" });
-    }
-
-    const token = await getPayPalAccessToken();
-
-    const resp = await fetch(`${PAYPAL_BASE}/v2/checkout/orders`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        intent: "CAPTURE",
-        purchase_units: [
-          { amount: { currency_code: "USD", value: total.toFixed(2) } },
-        ],
-        application_context: {
-          brand_name: "Arctic Labs Supply",
-          user_action: "PAY_NOW",
-          return_url: returnUrl,
-          cancel_url: cancelUrl,
-        },
-      }),
+    console.error("Square create-checkout error:", err?.errors || err);
+    return res.status(500).json({
+      error: "Square create-checkout failed",
+      details: err?.errors || err?.message || "unknown",
     });
-
-    const data = await resp.json();
-    if (!resp.ok) throw new Error("PayPal create failed");
-
-    const approveUrl =
-      (data.links || []).find((l) => l.rel === "approve")?.href || null;
-
-    return res.json({ orderID: data.id, approveUrl });
-  } catch (err) {
-    console.error("PayPal error:", err);
-    return res.status(500).json({ error: "PayPal checkout failed" });
   }
 });
 
-/* =======================
-   Stripe: Create Session
-======================= */
-app.post("/create-checkout-session", async (req, res) => {
-  try {
-    if (!stripe) {
-      return res.status(500).json({ error: "Stripe not configured" });
-    }
-
-    const items = Array.isArray(req.body.items) ? req.body.items : [];
-    if (items.length === 0) {
-      return res.status(400).json({ error: "No items" });
-    }
-
-    const line_items = items.map((i) => ({
-      price: i.id,
-      quantity: i.quantity || 1,
-    }));
-
-    const session = await stripe.checkout.sessions.create({
-      mode: "payment",
-      line_items,
-      success_url:
-        
-"https://arcticlabsupply.com/success?session_id={CHECKOUT_SESSION_ID}",
-      cancel_url: "https://arcticlabsupply.com/cart",
-    });
-
-    return res.json({ url: session.url });
-  } catch (err) {
-    console.error("Stripe error:", err);
-    return res.status(500).json({ error: "Stripe checkout failed" });
-  }
-});
-
-/* =======================
-   Start Server
-======================= */
 const PORT = process.env.PORT || 4242;
-app.listen(PORT, () => {
-  console.log(`Backend running on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`Backend listening on ${PORT}`));
 
