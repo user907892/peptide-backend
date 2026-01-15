@@ -1,4 +1,5 @@
-\
+node -c server.js
+
 "use strict";
 
 const express = require("express");
@@ -12,12 +13,9 @@ dotenv.config();
 
 const app = express();
 
-// ✅ Change this string any time you redeploy to prove Render is running the new code
-const SERVER_VERSION = "square-accessToken-1";
-
-/* =========================
+/* -----------------------
    CORS
-========================= */
+------------------------ */
 const allowedOrigins = [
   "https://arcticlabsupply.com",
   "https://www.arcticlabsupply.com",
@@ -41,27 +39,32 @@ app.use(
 app.options("*", cors());
 app.use(express.json());
 
-/* =========================
+/* -----------------------
    Health
-========================= */
-app.get("/", (_req, res) => {
-  res.json({ status: "ok", message: "Backend live", version: SERVER_VERSION });
+------------------------ */
+app.get("/", (req, res) => {
+  res.json({ status: "ok", message: "Backend live" });
 });
 
-/* =========================
+/* -----------------------
    Supabase
-========================= */
+------------------------ */
 const SUPABASE_URL = String(process.env.SUPABASE_URL || "").trim();
-const SUPABASE_SERVICE_ROLE_KEY = String(process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
+const SUPABASE_SERVICE_ROLE_KEY = 
+String(process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
 
 const supabase =
   SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
     ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
     : null;
 
-/* =========================
+console.log("Supabase URL present:", !!SUPABASE_URL);
+console.log("Supabase service key present:", !!SUPABASE_SERVICE_ROLE_KEY);
+
+/* -----------------------
    Orders: create
-========================= */
+   POST /orders/create
+------------------------ */
 app.post("/orders/create", async (req, res) => {
   try {
     if (!supabase) {
@@ -71,6 +74,8 @@ app.post("/orders/create", async (req, res) => {
     const body = req.body || {};
     const items = body.items;
     const totals = body.totals;
+    const coupon = body.coupon;
+    const timestamp = body.timestamp;
 
     if (!Array.isArray(items) || items.length === 0) {
       return res.status(400).json({ error: "items required" });
@@ -80,87 +85,38 @@ app.post("/orders/create", async (req, res) => {
     }
 
     const payload = {
-      order_id: body.orderId || null,
       items,
       totals,
-      coupon: body.coupon || null,
-      shipping_address: body.shippingAddress || body.shipping || null,
-      client_timestamp: body.timestamp ? new Date(body.timestamp).toISOString() : null,
+      coupon: coupon || null,
+      client_timestamp: timestamp ? new Date(timestamp).toISOString() : 
+null,
       status: "new",
-      payment_status: "pending",
     };
 
     const { data, error } = await supabase
       .from("orders")
       .insert([payload])
-      .select("id, created_at, order_id")
+      .select("id, created_at")
       .single();
 
     if (error) {
-      return res.status(500).json({ error: "db insert failed", details: error.message });
+      console.error("Supabase insert error:", error);
+      return res.status(500).json({ error: "db insert failed", details: 
+error.message });
     }
 
     return res.json({ ok: true, order: data });
   } catch (err) {
-    return res.status(500).json({ error: "server error", details: String(err?.message || err) });
+    console.error("orders/create error:", err);
+    return res.status(500).json({ error: "server error", details: 
+String(err?.message || err) });
   }
 });
 
-/* =========================
-   Orders: confirm
-========================= */
-app.post("/orders/confirm", async (req, res) => {
-  try {
-    if (!supabase) {
-      return res.status(500).json({ ok: false, message: "Supabase not configured" });
-    }
-
-    const { orderId, transactionId, pendingOrder } = req.body || {};
-
-    if (!pendingOrder) {
-      return res.status(400).json({ ok: false, message: "Missing pendingOrder payload" });
-    }
-
-    const resolvedOrderId = orderId || pendingOrder.orderId || `ORD-${Date.now()}`;
-
-    const totals = {
-      sub: pendingOrder.subtotal ?? pendingOrder.sub ?? 0,
-      discount: pendingOrder.discount ?? 0,
-      shippingCost: pendingOrder.shippingCost ?? pendingOrder.shipping ?? 0,
-      total: pendingOrder.total ?? 0,
-    };
-
-    const payload = {
-      order_id: resolvedOrderId,
-      items: pendingOrder.items || [],
-      totals,
-      coupon: pendingOrder.coupon || null,
-      shipping_address: pendingOrder.shippingAddress || pendingOrder.shipping || null,
-      payment_status: "paid",
-      paid_at: new Date().toISOString(),
-      square_transaction_id: transactionId || null,
-      status: "paid",
-    };
-
-    const { data, error } = await supabase
-      .from("orders")
-      .insert([payload])
-      .select("id, created_at, order_id")
-      .single();
-
-    if (error) {
-      return res.status(500).json({ ok: false, message: "Supabase insert failed", error: error.message });
-    }
-
-    return res.json({ ok: true, order: data });
-  } catch (err) {
-    return res.status(500).json({ ok: false, message: "Server error", details: String(err?.message || err) });
-  }
-});
-
-/* =========================
-   Admin
-========================= */
+/* -----------------------
+   Orders: admin list
+   GET /admin/orders
+------------------------ */
 app.get("/admin/orders", async (req, res) => {
   try {
     if (!supabase) {
@@ -176,73 +132,80 @@ app.get("/admin/orders", async (req, res) => {
 
     const { data, error } = await supabase
       .from("orders")
-      .select("*")
+      .select("id, created_at, items, totals, coupon, client_timestamp, status")
       .order("created_at", { ascending: false })
       .limit(200);
 
     if (error) {
-      return res.status(500).json({ error: "db read failed", details: error.message });
+      console.error("Supabase list error:", error);
+      return res.status(500).json({ error: "db read failed", details: 
+error.message });
     }
 
     return res.json({ orders: data });
   } catch (err) {
-    return res.status(500).json({ error: "server error", details: String(err?.message || err) });
+    console.error("admin/orders error:", err);
+    return res.status(500).json({ error: "server error", details: 
+String(err?.message || err) });
   }
 });
 
-/* =========================
-   Square checkout
-========================= */
-const SQUARE_ACCESS_TOKEN = String(process.env.SQUARE_ACCESS_TOKEN || "").trim();
-const SQUARE_LOCATION_ID = String(process.env.SQUARE_LOCATION_ID || "").trim();
-const SQUARE_ENV = String(process.env.SQUARE_ENV || "sandbox").toLowerCase();
+/* -----------------------
+   Square
+------------------------ */
+const SQUARE_ACCESS_TOKEN = process.env.SQUARE_ACCESS_TOKEN;
+const SQUARE_LOCATION_ID = process.env.SQUARE_LOCATION_ID;
+const SQUARE_ENV = String(process.env.SQUARE_ENV || 
+"sandbox").toLowerCase();
 
 function getSquareEnvironment() {
-  return SQUARE_ENV === "production" ? SquareEnvironment.Production : SquareEnvironment.Sandbox;
+  return SQUARE_ENV === "production" ? SquareEnvironment.Production : 
+SquareEnvironment.Sandbox;
 }
 
-// ✅ FIX: use accessToken (prevents 401 auth issues on many SDK versions)
-const squareClient =
-  SQUARE_ACCESS_TOKEN && SQUARE_LOCATION_ID
-    ? new SquareClient({
-        environment: getSquareEnvironment(),
-        accessToken: SQUARE_ACCESS_TOKEN,
-      })
-    : null;
+const squareClient = SQUARE_ACCESS_TOKEN
+  ? new SquareClient({
+      environment: getSquareEnvironment(),
+      token: SQUARE_ACCESS_TOKEN,
+      accessToken: SQUARE_ACCESS_TOKEN,
+      bearerAuthCredentials: { accessToken: SQUARE_ACCESS_TOKEN },
+    })
+  : null;
 
 app.post("/square/create-checkout", async (req, res) => {
   try {
     if (!squareClient || !SQUARE_LOCATION_ID) {
-      return res.status(500).json({ error: "Square not configured" });
+      return res.status(500).json({
+        error: "Square not configured",
+        message: "Missing SQUARE_ACCESS_TOKEN or SQUARE_LOCATION_ID",
+      });
     }
 
-    const amount = Number(req.body?.total);
-    const returnUrl = req.body?.returnUrl;
+    const { total, currency = "USD", returnUrl, cancelUrl } = req.body || 
+{};
 
-    if (!returnUrl) {
-      return res.status(400).json({ error: "Missing returnUrl" });
-    }
-
+    const amount = Number(total);
     if (!Number.isFinite(amount) || amount <= 0) {
       return res.status(400).json({ error: "Invalid total" });
     }
+    if (!returnUrl || !cancelUrl) {
+      return res.status(400).json({ error: "Missing returnUrl/cancelUrl" 
+});
+    }
 
-    // Helpful runtime debug (check Render logs)
-    console.log("Square ENV:", SQUARE_ENV);
-    console.log("Square Location:", SQUARE_LOCATION_ID);
-    console.log("Square token starts:", (SQUARE_ACCESS_TOKEN || "").slice(0, 4));
-    console.log("Server version:", SERVER_VERSION);
+    const centsNumber = Math.round(amount * 100);
+    const cents = BigInt(centsNumber);
+    const idempotencyKey = crypto.randomUUID();
 
-    const cents = BigInt(Math.round(amount * 100));
     const resp = await squareClient.checkout.paymentLinks.create({
-      idempotencyKey: crypto.randomUUID(),
+      idempotencyKey,
       order: {
         locationId: SQUARE_LOCATION_ID,
         lineItems: [
           {
             name: "Order Total",
             quantity: "1",
-            basePriceMoney: { amount: cents, currency: "USD" },
+            basePriceMoney: { amount: cents, currency },
           },
         ],
       },
@@ -257,19 +220,30 @@ app.post("/square/create-checkout", async (req, res) => {
       body?.url;
 
     if (!checkoutUrl) {
-      return res.status(500).json({ error: "No checkout URL returned" });
+      return res.status(500).json({ error: "No checkout URL returned", 
+details: body || null });
     }
 
     return res.json({ checkoutUrl });
   } catch (err) {
-    return res.status(500).json({ error: "Square checkout failed", details: String(err?.message || err) });
+    const squareErrors =
+      err?.errors || err?.result?.errors || err?.response?.body?.errors || 
+err?.cause?.errors || null;
+
+    console.error("Square create-checkout error:", squareErrors || err);
+
+    return res.status(500).json({
+      error: "Square create-checkout failed",
+      details: squareErrors || err?.message || String(err),
+    });
   }
 });
 
-/* =========================
-   Start
-========================= */
+/* -----------------------
+   Start server
+------------------------ */
 const PORT = Number(process.env.PORT) || 10000;
 app.listen(PORT, () => {
-  console.log(`✅ Backend listening on ${PORT} (version ${SERVER_VERSION})`);
+  console.log(`✅ Backend listening on ${PORT}`);
 });
+
