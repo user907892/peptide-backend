@@ -82,9 +82,10 @@ app.post("/square/create-checkout", async (req, res) => {
     const cents = Math.round(amount * 100);
     const idempotencyKey = crypto.randomUUID();
 
-    // ✅ New Square SDK: checkout.paymentLinks.create(...)
-    // Use BigInt for amount (common in newer SDKs), with a safe fallback.
+    // Create payment link via new SDK
     let resp;
+
+    // Try BigInt first (some SDKs prefer it)
     try {
       resp = await squareClient.checkout.paymentLinks.create({
         idempotencyKey,
@@ -106,7 +107,7 @@ app.post("/square/create-checkout", async (req, res) => {
         },
       });
     } catch (e) {
-      // Fallback if your installed SDK expects number instead of BigInt
+      // Fallback to number if BigInt isn't accepted
       resp = await squareClient.checkout.paymentLinks.create({
         idempotencyKey,
         order: {
@@ -128,8 +129,8 @@ app.post("/square/create-checkout", async (req, res) => {
       });
     }
 
-    // Be defensive across SDK response shapes
     const body = resp?.result ?? resp;
+
     const checkoutUrl =
       body?.paymentLink?.url ||
       body?.payment_link?.url ||
@@ -145,10 +146,22 @@ app.post("/square/create-checkout", async (req, res) => {
 
     return res.json({ checkoutUrl });
   } catch (err) {
-    console.error("Square create-checkout error:", err?.errors || err);
+    // Pull Square errors from common shapes
+    const squareErrors =
+      err?.errors ||
+      err?.result?.errors ||
+      err?.response?.body?.errors ||
+      err?.cause?.errors ||
+      null;
+
+    console.error(
+      "Square create-checkout error:",
+      squareErrors ? JSON.stringify(squareErrors, null, 2) : err
+    );
+
     return res.status(500).json({
       error: "Square create-checkout failed",
-      details: err?.errors || err?.message || "unknown",
+      details: squareErrors || err?.message || String(err),
     });
   }
 });
