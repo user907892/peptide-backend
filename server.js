@@ -54,8 +54,9 @@ const PAYPAL_CLIENT_SECRET = process.env.PAYPAL_CLIENT_SECRET;
 const PAYPAL_ENV = (process.env.PAYPAL_ENV || "sandbox").toLowerCase();
 
 const PAYPAL_BASE =
-  PAYPAL_ENV === "live" ? "https://api-m.paypal.com" : 
-"https://api-m.sandbox.paypal.com";
+  PAYPAL_ENV === "live"
+    ? "https://api-m.paypal.com"
+    : "https://api-m.sandbox.paypal.com";
 
 async function getPayPalAccessToken() {
   if (!PAYPAL_CLIENT_ID || !PAYPAL_CLIENT_SECRET) {
@@ -138,8 +139,8 @@ app.post("/square/create-checkout", async (req, res) => {
           {
             name: "Arctic Labs Order",
             quantity: "1",
-            basePriceMoney: { amount: Math.round(totalNum * 100), currency 
-},
+            basePriceMoney: { amount: Math.round(totalNum * 100), 
+currency: currency },
           },
         ],
       },
@@ -153,7 +154,8 @@ app.post("/square/create-checkout", async (req, res) => {
 
     const url = result && result.paymentLink && result.paymentLink.url;
     if (!url) {
-      return res.status(500).json({ error: "Square did not return checkout URL" });
+      return res.status(500).json({ error: "Square did not return checkout 
+URL" });
     }
 
     return res.json({ url });
@@ -189,8 +191,10 @@ app.post("/paypal/create-order", async (req, res) => {
     const payload = {
       intent: "CAPTURE",
       purchase_units: [
-        { amount: { currency_code: currency, value: value.toFixed(2) }, 
-description: "Order" },
+        {
+          amount: { currency_code: currency, value: value.toFixed(2) },
+          description: "Order",
+        },
       ],
       application_context: {
         brand_name: "Arctic Labs Supply",
@@ -273,22 +277,27 @@ message: "Missing STRIPE_SECRET_KEY" });
     const line_items = [];
     for (const item of items) {
       if (!item || !item.id) continue;
-      line_items.push({ price: item.id, quantity: Number(item.quantity) > 
-0 ? Number(item.quantity) : 1 });
+      const qty = Number(item.quantity) > 0 ? Number(item.quantity) : 1;
+      line_items.push({ price: item.id, quantity: qty });
     }
 
     if (typeof shipping === "number" && shipping > 0) {
       line_items.push({
-        price_data: { currency: "usd", product_data: { name: "Shipping" }, 
-unit_amount: Math.round(shipping * 100) },
+        price_data: {
+          currency: "usd",
+          product_data: { name: "Shipping" },
+          unit_amount: Math.round(shipping * 100),
+        },
         quantity: 1,
       });
     }
 
-    if (line_items.length === 0) return res.status(400).json({ error: "No 
-valid line items" });
+    if (line_items.length === 0) {
+      return res.status(400).json({ error: "No valid line items" });
+    }
 
     const normalizedCoupon = normalizeCoupon(coupon);
+
     let discounts;
     let appliedPromotionCodeId = null;
 
