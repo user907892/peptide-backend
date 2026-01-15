@@ -1,4 +1,3 @@
-node -c server.js
 
 "use strict";
 
