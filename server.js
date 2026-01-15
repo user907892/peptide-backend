@@ -153,8 +153,7 @@ app.post("/square/create-checkout", async (req, res) => {
 
     const url = result && result.paymentLink && result.paymentLink.url;
     if (!url) {
-      return res.status(500).json({ error: "Square did not return checkout 
-URL" });
+      return res.status(500).json({ error: "Square did not return checkout URL" });
     }
 
     return res.json({ url });
