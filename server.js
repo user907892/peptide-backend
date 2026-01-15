@@ -1,4 +1,4 @@
-"use strict";
+k"use strict";
 
 /*
 server.js
@@ -11,7 +11,12 @@ const express = require("express");
 const cors = require("cors");
 const Stripe = require("stripe");
 const crypto = require("crypto");
-const { Client, Environment } = require("square");
+
+// ✅ IMPORTANT: load Square in a way that works across SDK versions
+const Square = require("square");
+const SquareClient = Square.Client || Square?.default?.Client;
+const SquareEnvironment = Square.Environment || 
+Square?.default?.Environment;
 
 const app = express();
 
@@ -64,9 +69,8 @@ async function getPayPalAccessToken() {
     throw new Error("PayPal env vars missing");
   }
 
-  const auth = Buffer.from(
-    `${PAYPAL_CLIENT_ID}:${PAYPAL_CLIENT_SECRET}`
-  ).toString("base64");
+  const auth = 
+Buffer.from(`${PAYPAL_CLIENT_ID}:${PAYPAL_CLIENT_SECRET}`).toString("base64");
 
   const resp = await fetch(`${PAYPAL_BASE}/v1/oauth2/token`, {
     method: "POST",
@@ -88,13 +92,21 @@ async function getPayPalAccessToken() {
 let square = null;
 
 if (process.env.SQUARE_ACCESS_TOKEN && process.env.SQUARE_LOCATION_ID) {
-  square = new Client({
-    accessToken: process.env.SQUARE_ACCESS_TOKEN,
-    environment:
-      (process.env.SQUARE_ENV || "production").toLowerCase() === "sandbox"
-        ? Environment.Sandbox
-        : Environment.Production,
-  });
+  if (!SquareClient || !SquareEnvironment) {
+    // If the SDK export shape changed, fail gracefully (don’t crash 
+deploy)
+    console.warn("⚠️ Square SDK loaded but missing Client/Environment 
+exports. Check square package version.");
+  } else {
+    const isSandbox = (process.env.SQUARE_ENV || 
+"production").toLowerCase() === "sandbox";
+
+    square = new SquareClient({
+      accessToken: process.env.SQUARE_ACCESS_TOKEN,
+      environment: isSandbox ? SquareEnvironment.Sandbox : 
+SquareEnvironment.Production,
+    });
+  }
 } else {
   console.warn("⚠️ Square env vars not set");
 }
@@ -135,28 +147,27 @@ app.post("/square/create-checkout", async (req, res) => {
           {
             name: "Arctic Labs Order",
             quantity: "1",
-            basePriceMoney: {
-              amount: Math.round(total * 100),
-              currency: "USD",
-            },
+            basePriceMoney: { amount: Math.round(total * 100), currency: 
+"USD" },
           },
         ],
       },
       checkoutOptions: {
         redirectUrl: successUrl,
+        askForShippingAddress: true,
       },
     });
 
-    if (!result?.paymentLink?.url) {
-      return res
-        .status(500)
-        .json({ error: "Square did not return checkout URL" });
+    const url = result?.paymentLink?.url;
+    if (!url) {
+      return res.status(500).json({ error: "Square did not return checkout 
+URL" });
     }
 
-    res.json({ url: result.paymentLink.url });
+    return res.json({ url });
   } catch (err) {
     console.error("Square error:", err);
-    res.status(500).json({ error: "Square checkout failed" });
+    return res.status(500).json({ error: "Square checkout failed" });
   }
 });
 
@@ -180,20 +191,12 @@ app.post("/paypal/create-order", async (req, res) => {
 
     const resp = await fetch(`${PAYPAL_BASE}/v2/checkout/orders`, {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": 
+"application/json" },
       body: JSON.stringify({
         intent: "CAPTURE",
-        purchase_units: [
-          {
-            amount: {
-              currency_code: "USD",
-              value: total.toFixed(2),
-            },
-          },
-        ],
+        purchase_units: [{ amount: { currency_code: "USD", value: 
+total.toFixed(2) } }],
         application_context: {
           brand_name: "Arctic Labs Supply",
           user_action: "PAY_NOW",
@@ -206,11 +209,11 @@ app.post("/paypal/create-order", async (req, res) => {
     const data = await resp.json();
     if (!resp.ok) throw new Error("PayPal create failed");
 
-    const approve = data.links.find((l) => l.rel === "approve")?.href;
-    res.json({ orderID: data.id, approveUrl: approve });
+    const approve = data.links?.find((l) => l.rel === "approve")?.href;
+    return res.json({ orderID: data.id, approveUrl: approve });
   } catch (err) {
     console.error("PayPal error:", err);
-    res.status(500).json({ error: "PayPal checkout failed" });
+    return res.status(500).json({ error: "PayPal checkout failed" });
   }
 });
 
@@ -236,16 +239,15 @@ app.post("/create-checkout-session", async (req, res) => {
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
       line_items,
-      success_url:
-        
+      success_url: 
 "https://arcticlabsupply.com/success?session_id={CHECKOUT_SESSION_ID}",
       cancel_url: "https://arcticlabsupply.com/cart",
     });
 
-    res.json({ url: session.url });
+    return res.json({ url: session.url });
   } catch (err) {
     console.error("Stripe error:", err);
-    res.status(500).json({ error: "Stripe checkout failed" });
+    return res.status(500).json({ error: "Stripe checkout failed" });
   }
 });
 
