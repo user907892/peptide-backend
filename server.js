@@ -292,9 +292,11 @@ app.post("/square/create-checkout", async (req, res) => {
           {
             name: "Order Total",
             quantity: "1",
-            basePriceMoney: {
-              amount: cents,
-              currency: "USD",
+
+	basePriceMoney: {
+	  amount: BigInt(cents),
+ 	 currency: "USD",
+	}
             },
           },
         ],
