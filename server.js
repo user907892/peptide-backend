@@ -113,9 +113,9 @@ app.get("/admin/orders", async (req, res) => {
       });
     }
 
-    // ✅ Read expected token from Render env at request time
-    const token = req.headers["x-admin-token"];
-    const expected = process.env.ADMIN_TOKEN;
+    // ✅ Trim both values to avoid hidden spaces/newlines
+    const token = String(req.headers["x-admin-token"] || "").trim();
+    const expected = String(process.env.ADMIN_TOKEN || "").trim();
 
     if (!expected || token !== expected) {
       return res.status(401).json({ error: "unauthorized" });
@@ -123,7 +123,15 @@ app.get("/admin/orders", async (req, res) => {
 
     const { data, error } = await supabase
       .from("orders")
-      .select("id, created_at, items, totals, coupon, client_timestamp, status")
+      .select(`
+        id,
+        created_at,
+        items,
+        totals,
+        coupon,
+        client_timestamp,
+        status
+      `)
       .order("created_at", { ascending: false })
       .limit(200);
 
@@ -142,7 +150,7 @@ app.get("/admin/orders", async (req, res) => {
 });
 
 // =========================
-// SQUARE (your existing)
+// SQUARE (Checkout)
 // =========================
 const SQUARE_ACCESS_TOKEN = process.env.SQUARE_ACCESS_TOKEN;
 const SQUARE_LOCATION_ID = process.env.SQUARE_LOCATION_ID;
