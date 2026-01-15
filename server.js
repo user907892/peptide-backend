@@ -1,3 +1,4 @@
+\
 "use strict";
 
 const express = require("express");
@@ -11,7 +12,12 @@ dotenv.config();
 
 const app = express();
 
-/* CORS */
+// ✅ Change this string any time you redeploy to prove Render is running the new code
+const SERVER_VERSION = "square-accessToken-1";
+
+/* =========================
+   CORS
+========================= */
 const allowedOrigins = [
   "https://arcticlabsupply.com",
   "https://www.arcticlabsupply.com",
@@ -35,12 +41,16 @@ app.use(
 app.options("*", cors());
 app.use(express.json());
 
-/* Health */
+/* =========================
+   Health
+========================= */
 app.get("/", (_req, res) => {
-  res.json({ status: "ok", message: "Backend live" });
+  res.json({ status: "ok", message: "Backend live", version: SERVER_VERSION });
 });
 
-/* Supabase */
+/* =========================
+   Supabase
+========================= */
 const SUPABASE_URL = String(process.env.SUPABASE_URL || "").trim();
 const SUPABASE_SERVICE_ROLE_KEY = String(process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
 
@@ -49,7 +59,9 @@ const supabase =
     ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
     : null;
 
-/* Orders: create */
+/* =========================
+   Orders: create
+========================= */
 app.post("/orders/create", async (req, res) => {
   try {
     if (!supabase) {
@@ -94,7 +106,9 @@ app.post("/orders/create", async (req, res) => {
   }
 });
 
-/* Orders: confirm */
+/* =========================
+   Orders: confirm
+========================= */
 app.post("/orders/confirm", async (req, res) => {
   try {
     if (!supabase) {
@@ -144,7 +158,9 @@ app.post("/orders/confirm", async (req, res) => {
   }
 });
 
-/* Admin */
+/* =========================
+   Admin
+========================= */
 app.get("/admin/orders", async (req, res) => {
   try {
     if (!supabase) {
@@ -174,7 +190,9 @@ app.get("/admin/orders", async (req, res) => {
   }
 });
 
-/* Square checkout */
+/* =========================
+   Square checkout
+========================= */
 const SQUARE_ACCESS_TOKEN = String(process.env.SQUARE_ACCESS_TOKEN || "").trim();
 const SQUARE_LOCATION_ID = String(process.env.SQUARE_LOCATION_ID || "").trim();
 const SQUARE_ENV = String(process.env.SQUARE_ENV || "sandbox").toLowerCase();
@@ -209,6 +227,12 @@ app.post("/square/create-checkout", async (req, res) => {
       return res.status(400).json({ error: "Invalid total" });
     }
 
+    // Helpful runtime debug (check Render logs)
+    console.log("Square ENV:", SQUARE_ENV);
+    console.log("Square Location:", SQUARE_LOCATION_ID);
+    console.log("Square token starts:", (SQUARE_ACCESS_TOKEN || "").slice(0, 4));
+    console.log("Server version:", SERVER_VERSION);
+
     const cents = BigInt(Math.round(amount * 100));
     const resp = await squareClient.checkout.paymentLinks.create({
       idempotencyKey: crypto.randomUUID(),
@@ -242,8 +266,10 @@ app.post("/square/create-checkout", async (req, res) => {
   }
 });
 
-/* Start */
+/* =========================
+   Start
+========================= */
 const PORT = Number(process.env.PORT) || 10000;
 app.listen(PORT, () => {
-  console.log(`Backend listening on ${PORT}`);
+  console.log(`✅ Backend listening on ${PORT} (version ${SERVER_VERSION})`);
 });
