@@ -50,7 +50,7 @@ const supabase =
     ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
     : null;
 
-/* Orders: create */
+/* Orders: create (pre-checkout record) */
 app.post("/orders/create", async (req, res) => {
   try {
     if (!supabase) {
@@ -63,6 +63,10 @@ app.post("/orders/create", async (req, res) => {
     const coupon = body.coupon;
     const timestamp = body.timestamp;
 
+    // NEW (optional): shippingAddress + orderId
+    const orderId = body.orderId || null;
+    const shippingAddress = body.shippingAddress || body.shipping || null;
+
     if (!Array.isArray(items) || items.length === 0) {
       return res.status(400).json({ error: "items required" });
     }
@@ -71,18 +75,21 @@ app.post("/orders/create", async (req, res) => {
     }
 
     const payload = {
+      order_id: orderId || null,
       items,
       totals,
       coupon: coupon || null,
+      shipping_address: shippingAddress,
       client_timestamp: timestamp ? new Date(timestamp).toISOString() : 
 null,
       status: "new",
+      payment_status: "pending",
     };
 
     const { data, error } = await supabase
       .from("orders")
       .insert([payload])
-      .select(["id", "created_at"].join(","))
+      .select("id, created_at, order_id")
       .single();
 
     if (error) {
@@ -97,7 +104,106 @@ String(err?.message || err) });
   }
 });
 
-/* Admin: list orders */
+/* Orders: confirm (called from /success after Square redirect) */
+app.post("/orders/confirm", async (req, res) => {
+  try {
+    if (!supabase) {
+      return res.status(500).json({ ok: false, message: "Supabase not 
+configured" });
+    }
+
+    const { orderId, transactionId, pendingOrder } = req.body || {};
+
+    if (!pendingOrder) {
+      return res.status(400).json({ ok: false, message: "Missing 
+pendingOrder payload" });
+    }
+
+    const resolvedOrderId = orderId || pendingOrder.orderId || ("ORD-" + 
+Date.now());
+
+    // Normalize shipping naming (supports either shippingAddress or 
+shipping)
+    const shippingAddress = pendingOrder.shippingAddress || 
+pendingOrder.shipping || null;
+
+    const totals = {
+      sub: pendingOrder.subtotal ?? pendingOrder.sub ?? 0,
+      discount: pendingOrder.discount ?? 0,
+      shippingCost: pendingOrder.shippingCost ?? pendingOrder.shippingCost 
+?? pendingOrder.shipping ?? 0,
+      total: pendingOrder.total ?? 0,
+    };
+
+    // ✅ Try to update an existing row created earlier (if you created 
+one before redirect)
+    // If no row exists, we insert a new one.
+    const updatePayload = {
+      order_id: resolvedOrderId,
+      items: pendingOrder.items || [],
+      totals,
+      coupon: pendingOrder.coupon || null,
+      shipping_address: shippingAddress,
+      payment_status: "paid",
+      paid_at: new Date().toISOString(),
+      square_transaction_id: transactionId || null,
+      status: "paid",
+    };
+
+    // Attempt update by order_id first
+    const { data: updated, error: updateErr } = await supabase
+      .from("orders")
+      .update(updatePayload)
+      .eq("order_id", resolvedOrderId)
+      .select("id, created_at, order_id, payment_status, paid_at")
+      .maybeSingle();
+
+    if (updateErr) {
+      console.error("Supabase update error:", updateErr);
+      return res.status(500).json({ ok: false, message: "Supabase update 
+failed", error: updateErr.message });
+    }
+
+    if (updated) {
+      return res.json({ ok: true, mode: "updated", order: updated });
+    }
+
+    // If update didn't find a row, insert new
+    const insertPayload = {
+      order_id: resolvedOrderId,
+      items: pendingOrder.items || [],
+      totals,
+      coupon: pendingOrder.coupon || null,
+      shipping_address: shippingAddress,
+      client_timestamp: pendingOrder.createdAt ? new 
+Date(pendingOrder.createdAt).toISOString() : null,
+      payment_status: "paid",
+      paid_at: new Date().toISOString(),
+      square_transaction_id: transactionId || null,
+      status: "paid",
+    };
+
+    const { data: inserted, error: insertErr } = await supabase
+      .from("orders")
+      .insert([insertPayload])
+      .select("id, created_at, order_id, payment_status, paid_at")
+      .single();
+
+    if (insertErr) {
+      console.error("Supabase insert error:", insertErr);
+      return res.status(500).json({ ok: false, message: "Supabase insert 
+failed", error: insertErr.message });
+    }
+
+    return res.json({ ok: true, mode: "inserted", order: inserted });
+  } catch (e) {
+    console.error("orders/confirm crash:", e);
+    return res.status(500).json({ ok: false, message: "Server error", 
+details: String(e?.message || e) });
+  }
+});
+
+/* Admin: list orders (UPDATED to include shipping + payment) */
 app.get("/admin/orders", async (req, res) => {
   try {
     if (!supabase) {
@@ -114,11 +220,16 @@ app.get("/admin/orders", async (req, res) => {
     const selectCols = [
       "id",
       "created_at",
+      "order_id",
       "items",
       "totals",
       "coupon",
       "client_timestamp",
       "status",
+      "shipping_address",
+      "payment_status",
+      "paid_at",
+      "square_transaction_id",
     ].join(",");
 
     const { data, error } = await supabase
