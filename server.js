@@ -44,8 +44,9 @@ app.get("/", (req, res) => {
 // =========================
 // SUPABASE (Order Hub)
 // =========================
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const SUPABASE_URL = String(process.env.SUPABASE_URL || "").trim();
+const SUPABASE_SERVICE_ROLE_KEY = 
+String(process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
 
 const supabase =
   SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
@@ -258,4 +259,21 @@ app.post("/square/create-checkout", async (req, res) => {
 
 const PORT = process.env.PORT || 4242;
 app.listen(PORT, () => console.log(`Backend listening on ${PORT}`));
+
+app.get("/admin/supabase-debug", async (req, res) => {
+  try {
+    const urlOk = SUPABASE_URL.startsWith("https://") && 
+SUPABASE_URL.includes(".supabase.co");
+    return res.json({
+      supabaseUrlPresent: !!SUPABASE_URL,
+      supabaseUrlLooksValid: urlOk,
+      supabaseUrlPreview: SUPABASE_URL ? SUPABASE_URL.slice(0, 30) + "..." 
+: "",
+      serviceKeyPresent: !!SUPABASE_SERVICE_ROLE_KEY,
+      serviceKeyLen: SUPABASE_SERVICE_ROLE_KEY.length,
+    });
+  } catch (e) {
+    return res.status(500).json({ error: String(e?.message || e) });
+  }
+});
 
