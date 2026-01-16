@@ -10,9 +10,7 @@ dotenv.config();
 
 const app = express();
 
-/* -----------------------
-   CORS
------------------------- */
+// ---------------- CORS ----------------
 const allowedOrigins = [
   "https://arcticlabsupply.com",
   "https://www.arcticlabsupply.com",
@@ -26,165 +24,210 @@ app.use(
     origin(origin, cb) {
       if (!origin) return cb(null, true);
       if (allowedOrigins.includes(origin)) return cb(null, true);
-      return cb(new Error(`CORS blocked for origin: ${origin}`));
+      return cb(new Error("CORS_BLOCKED"));
     },
     methods: ["GET", "POST", "OPTIONS"],
     allowedHeaders: ["Content-Type", "x-admin-token"],
   })
 );
 
-app.use(express.json({ limit: "1mb" }));
 app.options("*", cors());
+app.use(express.json({ limit: "1mb" }));
 
-/* -----------------------
-   Health
------------------------- */
+// ---------------- Health ----------------
 app.get("/", (_req, res) => {
   res.json({ status: "ok", message: "Backend live" });
 });
 
-/* -----------------------
-   Supabase
------------------------- */
+// ---------------- Supabase ----------------
 const SUPABASE_URL = String(process.env.SUPABASE_URL || "").trim();
-const SUPABASE_SERVICE_ROLE_KEY = String(
-  process.env.SUPABASE_SERVICE_ROLE_KEY || ""
-).trim();
+const SUPABASE_SERVICE_ROLE_KEY = String(process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
 
 const supabase =
   SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
     ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
     : null;
 
-console.log("Supabase URL present:", !!SUPABASE_URL);
-console.log("Supabase service key present:", !!SUPABASE_SERVICE_ROLE_KEY);
+function requireAdmin(req) {
+  const token = String(req.headers["x-admin-token"] || "").trim();
+  const expected = String(process.env.ADMIN_TOKEN || "").trim();
+  return Boolean(expected) && token === expected;
+}
 
-/* -----------------------
-   Orders: create
------------------------- */
+// ---------------- Orders: create ----------------
+// Body: { items, totals, coupon, timestamp, orderId, shippingAddress }
 app.post("/orders/create", async (req, res) => {
   try {
-    if (!supabase) {
-      return res.status(500).json({ error: "Supabase not configured" });
-    }
+    if (!supabase) return res.status(500).json({ error: "SUPABASE_NOT_CONFIGURED" });
 
-    const { items, totals, coupon, timestamp } = req.body || {};
+    const { items, totals, coupon, timestamp, orderId, shippingAddress } = req.body || {};
 
     if (!Array.isArray(items) || items.length === 0) {
-      return res.status(400).json({ error: "items required" });
+      return res.status(400).json({ error: "ITEMS_REQUIRED" });
     }
     if (!totals || typeof totals !== "object") {
-      return res.status(400).json({ error: "totals required" });
+      return res.status(400).json({ error: "TOTALS_REQUIRED" });
     }
 
     const payload = {
+      order_id: orderId || null,
+      shipping_address: shippingAddress || null,
       items,
       totals,
       coupon: coupon || null,
-      client_timestamp: timestamp
-        ? new Date(timestamp).toISOString()
-        : null,
+      client_timestamp: timestamp ? new Date(timestamp).toISOString() : null,
       status: "new",
+      // Let DB default payment_status='pending'
     };
+
+    const selectCols = [
+      "id",
+      "created_at",
+      "order_id",
+      "status",
+      "payment_status",
+      "paid_at",
+      "shipping_status",
+      "shipped_at",
+    ].join(", ");
 
     const { data, error } = await supabase
       .from("orders")
       .insert([payload])
-      .select("id, created_at")
+      .select(selectCols)
       .single();
 
-    if (error) {
-      console.error("Supabase insert error:", error);
-      return res
-        .status(500)
-        .json({ error: "db insert failed", details: error.message });
-    }
+    if (error) return res.status(500).json({ error: "DB_INSERT_FAILED", details: error.message });
 
     return res.json({ ok: true, order: data });
-  } catch (err) {
-    console.error("orders/create error:", err);
-    return res
-      .status(500)
-      .json({ error: "server error", details: String(err) });
+  } catch (e) {
+    console.error("orders/create", e);
+    return res.status(500).json({ error: "SERVER_ERROR" });
   }
 });
 
-/* -----------------------
-   Orders: admin list
------------------------- */
+// ---------------- Orders: confirm (SuccessPage calls this) ----------------
+// Body: { orderId, transactionId }
+app.post("/orders/confirm", async (req, res) => {
+  try {
+    if (!supabase) return res.status(500).json({ error: "SUPABASE_NOT_CONFIGURED" });
+
+    const { orderId, transactionId } = req.body || {};
+    if (!orderId) return res.status(400).json({ error: "ORDER_ID_REQUIRED" });
+
+    const selectCols = [
+      "id",
+      "order_id",
+      "payment_status",
+      "paid_at",
+      "square_transaction_id",
+      "status",
+    ].join(", ");
+
+    const { data, error } = await supabase
+      .from("orders")
+      .update({
+        payment_status: "paid",
+        status: "paid",
+        paid_at: new Date().toISOString(),
+        square_transaction_id: transactionId || null,
+      })
+      .eq("order_id", String(orderId))
+      .select(selectCols)
+      .single();
+
+    if (error) return res.status(500).json({ error: "DB_UPDATE_FAILED", details: error.message });
+
+    return res.json({ ok: true, order: data });
+  } catch (e) {
+    console.error("orders/confirm", e);
+    return res.status(500).json({ error: "SERVER_ERROR" });
+  }
+});
+
+// ---------------- Admin: list orders ----------------
 app.get("/admin/orders", async (req, res) => {
   try {
-    if (!supabase) {
-      return res.status(500).json({ error: "Supabase not configured" });
-    }
+    if (!supabase) return res.status(500).json({ error: "SUPABASE_NOT_CONFIGURED" });
+    if (!requireAdmin(req)) return res.status(401).json({ error: "UNAUTHORIZED" });
 
-    const token = String(req.headers["x-admin-token"] || "").trim();
-    const expected = String(process.env.ADMIN_TOKEN || "").trim();
-
-    if (!expected || token !== expected) {
-      return res.status(401).json({ error: "unauthorized" });
-    }
-
-    const selectCols =
-      "id, created_at, items, totals, coupon, client_timestamp, status";
+    const selectCols = [
+      "id",
+      "created_at",
+      "order_id",
+      "items",
+      "totals",
+      "coupon",
+      "client_timestamp",
+      "status",
+      "payment_status",
+      "paid_at",
+      "square_transaction_id",
+      "shipping_address",
+      "shipping_status",
+      "shipped_at",
+    ].join(", ");
 
     const { data, error } = await supabase
       .from("orders")
       .select(selectCols)
       .order("created_at", { ascending: false })
-      .limit(200);
+      .limit(500);
 
-    if (error) {
-      console.error("Supabase list error:", error);
-      return res
-        .status(500)
-        .json({ error: "db read failed", details: error.message });
-    }
+    if (error) return res.status(500).json({ error: "DB_READ_FAILED", details: error.message });
 
-    return res.json({ orders: data });
-  } catch (err) {
-    console.error("admin/orders error:", err);
-    return res
-      .status(500)
-      .json({ error: "server error", details: String(err) });
+    return res.json({ orders: data || [] });
+  } catch (e) {
+    console.error("admin/orders", e);
+    return res.status(500).json({ error: "SERVER_ERROR" });
   }
 });
 
-/* -----------------------
-   Square config
------------------------- */
-const SQUARE_ACCESS_TOKEN = String(
-  process.env.SQUARE_ACCESS_TOKEN || ""
-).trim();
-const SQUARE_LOCATION_ID = String(
-  process.env.SQUARE_LOCATION_ID || ""
-).trim();
-const SQUARE_ENV = String(process.env.SQUARE_ENV || "sandbox")
-  .trim()
-  .toLowerCase();
+// ---------------- Admin: mark shipped/unshipped ----------------
+// Body: { shipped: true|false }
+app.post("/admin/orders/:id/ship", async (req, res) => {
+  try {
+    if (!supabase) return res.status(500).json({ error: "SUPABASE_NOT_CONFIGURED" });
+    if (!requireAdmin(req)) return res.status(401).json({ error: "UNAUTHORIZED" });
+
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ error: "INVALID_ID" });
+
+    const shipped = Boolean(req.body && req.body.shipped);
+
+    const { data, error } = await supabase
+      .from("orders")
+      .update({
+        shipping_status: shipped ? "shipped" : "not_shipped",
+        shipped_at: shipped ? new Date().toISOString() : null,
+      })
+      .eq("id", id)
+      .select(["id", "shipping_status", "shipped_at"].join(", "))
+      .single();
+
+    if (error) return res.status(500).json({ error: "UPDATE_FAILED", details: error.message });
+
+    return res.json({ ok: true, order: data });
+  } catch (e) {
+    console.error("admin/orders/:id/ship", e);
+    return res.status(500).json({ error: "SERVER_ERROR" });
+  }
+});
+
+// ---------------- Square (Payment Links) ----------------
+const SQUARE_ACCESS_TOKEN = String(process.env.SQUARE_ACCESS_TOKEN || "").trim();
+const SQUARE_LOCATION_ID = String(process.env.SQUARE_LOCATION_ID || "").trim();
+const SQUARE_ENV = String(process.env.SQUARE_ENV || "sandbox").trim().toLowerCase();
 
 const SQUARE_HOST =
-  SQUARE_ENV === "production"
-    ? "https://connect.squareup.com"
-    : "https://connect.squareupsandbox.com";
+  SQUARE_ENV === "production" ? "https://connect.squareup.com" : "https://connect.squareupsandbox.com";
 
-console.log("Square env:", SQUARE_ENV);
-console.log("Square host:", SQUARE_HOST);
-console.log(
-  "Square token prefix/len:",
-  SQUARE_ACCESS_TOKEN.slice(0, 6),
-  SQUARE_ACCESS_TOKEN.length
-);
-
-/* -----------------------
-   Square helpers
------------------------- */
 function looksLikePlaceholder(v) {
-  return !v || v.includes("<") || v.includes(">");
+  return !v || v.includes("<") || v.includes(">") || v.length < 10;
 }
 
 async function squareRequest(path, method, body) {
-  const res = await fetch(`${SQUARE_HOST}${path}`, {
+  const resp = await fetch(`${SQUARE_HOST}${path}`, {
     method,
     headers: {
       Authorization: `Bearer ${SQUARE_ACCESS_TOKEN}`,
@@ -193,44 +236,33 @@ async function squareRequest(path, method, body) {
     },
     body: body ? JSON.stringify(body) : undefined,
   });
-
-  const json = await res.json().catch(() => ({}));
-  return { ok: res.ok, status: res.status, json };
+  const json = await resp.json().catch(() => ({}));
+  return { ok: resp.ok, status: resp.status, json };
 }
 
-/* -----------------------
-   Square debug
------------------------- */
 app.get("/square/debug/locations", async (_req, res) => {
   const r = await squareRequest("/v2/locations", "GET");
   res.status(r.status).json(r.json);
 });
 
-/* -----------------------
-   Square checkout
------------------------- */
+// Body: { total, currency, returnUrl, cancelUrl, orderId }
 app.post("/square/create-checkout", async (req, res) => {
   try {
-    if (
-      looksLikePlaceholder(SQUARE_ACCESS_TOKEN) ||
-      looksLikePlaceholder(SQUARE_LOCATION_ID)
-    ) {
-      return res
-        .status(500)
-        .json({ error: "Square not configured correctly" });
+    if (looksLikePlaceholder(SQUARE_ACCESS_TOKEN) || looksLikePlaceholder(SQUARE_LOCATION_ID)) {
+      return res.status(500).json({ error: "SQUARE_NOT_CONFIGURED" });
     }
 
-    const { total, currency = "USD", returnUrl, cancelUrl } = req.body;
-
+    const { total, currency = "USD", returnUrl, cancelUrl, orderId } = req.body || {};
     const amount = Number(total);
-    if (!Number.isFinite(amount) || amount <= 0) {
-      return res.status(400).json({ error: "Invalid total" });
-    }
+
+    if (!Number.isFinite(amount) || amount <= 0) return res.status(400).json({ error: "INVALID_TOTAL" });
+    if (!returnUrl || !cancelUrl) return res.status(400).json({ error: "MISSING_REDIRECT_URLS" });
 
     const payload = {
       idempotency_key: crypto.randomUUID(),
       order: {
         location_id: SQUARE_LOCATION_ID,
+        ...(orderId ? { reference_id: String(orderId) } : {}),
         line_items: [
           {
             name: "Order",
@@ -248,30 +280,18 @@ app.post("/square/create-checkout", async (req, res) => {
       },
     };
 
-    const r = await squareRequest(
-      "/v2/online-checkout/payment-links",
-      "POST",
-      payload
-    );
+    const r = await squareRequest("/v2/online-checkout/payment-links", "POST", payload);
+    if (!r.ok) return res.status(500).json({ error: "SQUARE_FAILED", details: r.json });
 
-    if (!r.ok) {
-      console.error("Square error:", r.json);
-      return res
-        .status(500)
-        .json({ error: "Square checkout failed", details: r.json });
-    }
-
-    return res.json({ checkoutUrl: r.json.payment_link.url });
-  } catch (err) {
-    console.error("checkout error:", err);
-    return res.status(500).json({ error: "server error" });
+    return res.json({ checkoutUrl: r.json && r.json.payment_link ? r.json.payment_link.url : null });
+  } catch (e) {
+    console.error("square/create-checkout", e);
+    return res.status(500).json({ error: "SERVER_ERROR" });
   }
 });
 
-/* -----------------------
-   Start server
------------------------- */
+// ---------------- Start ----------------
 const PORT = Number(process.env.PORT) || 10000;
 app.listen(PORT, () => {
-  console.log(`✅ Backend running on port ${PORT}`);
+  console.log("Backend running on port", PORT);
 });
