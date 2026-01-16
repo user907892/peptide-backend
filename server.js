@@ -60,7 +60,18 @@ console.log("Supabase URL present:", !!SUPABASE_URL);
 console.log("Supabase service key present:", !!SUPABASE_SERVICE_ROLE_KEY);
 
 /* -----------------------
+   Helpers
+------------------------ */
+function requireAdmin(req) {
+  const token = String(req.headers["x-admin-token"] || "").trim();
+  const expected = String(process.env.ADMIN_TOKEN || "").trim();
+  return !!expected && token === expected;
+}
+
+/* -----------------------
    Orders: create
+   POST /orders/create
+   Body: { items, totals, coupon, timestamp, orderId?, shippingAddress? }
 ------------------------ */
 app.post("/orders/create", async (req, res) => {
   try {
@@ -68,7 +79,8 @@ app.post("/orders/create", async (req, res) => {
       return res.status(500).json({ error: "Supabase not configured" });
     }
 
-    const { items, totals, coupon, timestamp } = req.body || {};
+    const { items, totals, coupon, timestamp, orderId, shippingAddress } =
+      req.body || {};
 
     if (!Array.isArray(items) || items.length === 0) {
       return res.status(400).json({ error: "items required" });
@@ -81,16 +93,26 @@ app.post("/orders/create", async (req, res) => {
       items,
       totals,
       coupon: coupon || null,
-      client_timestamp: timestamp
-        ? new Date(timestamp).toISOString()
-        : null,
+      client_timestamp: timestamp ? new Date(timestamp).toISOString() : 
+null,
+
+      // Optional but recommended if your DB has these columns:
+      order_id: orderId || null,
+      shipping_address: shippingAddress || null,
+
       status: "new",
+      // Let DB default payment_status to 'pending'. If your DB default is 
+wrong,
+      // fix it in SQL rather than forcing here.
     };
 
     const { data, error } = await supabase
       .from("orders")
       .insert([payload])
-      .select("id, created_at")
+      .select(
+        "id, created_at, order_id, payment_status, paid_at, 
+shipping_status, shipped_at"
+      )
       .single();
 
     if (error) {
@@ -105,28 +127,29 @@ app.post("/orders/create", async (req, res) => {
     console.error("orders/create error:", err);
     return res
       .status(500)
-      .json({ error: "server error", details: String(err) });
+      .json({ error: "server error", details: String(err?.message || err) 
+});
   }
 });
 
 /* -----------------------
    Orders: admin list
+   GET /admin/orders
 ------------------------ */
 app.get("/admin/orders", async (req, res) => {
   try {
     if (!supabase) {
       return res.status(500).json({ error: "Supabase not configured" });
     }
-
-    const token = String(req.headers["x-admin-token"] || "").trim();
-    const expected = String(process.env.ADMIN_TOKEN || "").trim();
-
-    if (!expected || token !== expected) {
+    if (!requireAdmin(req)) {
       return res.status(401).json({ error: "unauthorized" });
     }
 
+    // IMPORTANT: include the fields your Admin UI uses
     const selectCols =
-      "id, created_at, items, totals, coupon, client_timestamp, status";
+      "id, created_at, items, totals, coupon, client_timestamp, status, 
+order_id, shipping_address, payment_status, paid_at, 
+square_transaction_id, shipping_status, shipped_at";
 
     const { data, error } = await supabase
       .from("orders")
@@ -146,19 +169,66 @@ app.get("/admin/orders", async (req, res) => {
     console.error("admin/orders error:", err);
     return res
       .status(500)
-      .json({ error: "server error", details: String(err) });
+      .json({ error: "server error", details: String(err?.message || err) 
+});
+  }
+});
+
+/* -----------------------
+   Admin: mark shipped / unshipped
+   POST /admin/orders/:id/ship
+   Body: { shipped: true|false }
+------------------------ */
+app.post("/admin/orders/:id/ship", async (req, res) => {
+  try {
+    if (!supabase) {
+      return res.status(500).json({ error: "Supabase not configured" });
+    }
+    if (!requireAdmin(req)) {
+      return res.status(401).json({ error: "unauthorized" });
+    }
+
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id) || id <= 0) {
+      return res.status(400).json({ error: "invalid id" });
+    }
+
+    const shipped = !!req.body?.shipped;
+
+    const { data, error } = await supabase
+      .from("orders")
+      .update({
+        shipping_status: shipped ? "shipped" : "not_shipped",
+        shipped_at: shipped ? new Date().toISOString() : null,
+      })
+      .eq("id", id)
+      .select("id, shipping_status, shipped_at")
+      .single();
+
+    if (error) {
+      console.error("Ship update failed:", error);
+      return res
+        .status(500)
+        .json({ error: "update failed", details: error.message });
+    }
+
+    return res.json({ ok: true, order: data });
+  } catch (err) {
+    console.error("admin ship error:", err);
+    return res
+      .status(500)
+      .json({ error: "server error", details: String(err?.message || err) 
+});
   }
 });
 
 /* -----------------------
    Square config
 ------------------------ */
-const SQUARE_ACCESS_TOKEN = String(
-  process.env.SQUARE_ACCESS_TOKEN || ""
-).trim();
-const SQUARE_LOCATION_ID = String(
-  process.env.SQUARE_LOCATION_ID || ""
-).trim();
+const SQUARE_ACCESS_TOKEN = String(process.env.SQUARE_ACCESS_TOKEN || 
+"").trim();
+const SQUARE_LOCATION_ID = String(process.env.SQUARE_LOCATION_ID || 
+"").trim();
 const SQUARE_ENV = String(process.env.SQUARE_ENV || "sandbox")
   .trim()
   .toLowerCase();
@@ -176,9 +246,6 @@ console.log(
   SQUARE_ACCESS_TOKEN.length
 );
 
-/* -----------------------
-   Square helpers
------------------------- */
 function looksLikePlaceholder(v) {
   return !v || v.includes("<") || v.includes(">");
 }
@@ -208,6 +275,10 @@ app.get("/square/debug/locations", async (_req, res) => {
 
 /* -----------------------
    Square checkout
+   POST /square/create-checkout
+   Body: { total, currency, returnUrl, cancelUrl, orderId? }
+   - orderId is optional; if you pass it, it will be stored in Square 
+order.reference_id
 ------------------------ */
 app.post("/square/create-checkout", async (req, res) => {
   try {
@@ -215,22 +286,32 @@ app.post("/square/create-checkout", async (req, res) => {
       looksLikePlaceholder(SQUARE_ACCESS_TOKEN) ||
       looksLikePlaceholder(SQUARE_LOCATION_ID)
     ) {
-      return res
-        .status(500)
-        .json({ error: "Square not configured correctly" });
+      return res.status(500).json({ error: "Square not configured 
+correctly" });
     }
 
-    const { total, currency = "USD", returnUrl, cancelUrl } = req.body;
+    const {
+      total,
+      currency = "USD",
+      returnUrl,
+      cancelUrl,
+      orderId,
+    } = req.body || {};
 
     const amount = Number(total);
     if (!Number.isFinite(amount) || amount <= 0) {
       return res.status(400).json({ error: "Invalid total" });
+    }
+    if (!returnUrl || !cancelUrl) {
+      return res.status(400).json({ error: "Missing returnUrl/cancelUrl" 
+});
     }
 
     const payload = {
       idempotency_key: crypto.randomUUID(),
       order: {
         location_id: SQUARE_LOCATION_ID,
+        ...(orderId ? { reference_id: String(orderId) } : {}),
         line_items: [
           {
             name: "Order",
@@ -261,10 +342,13 @@ app.post("/square/create-checkout", async (req, res) => {
         .json({ error: "Square checkout failed", details: r.json });
     }
 
-    return res.json({ checkoutUrl: r.json.payment_link.url });
+    return res.json({ checkoutUrl: r.json?.payment_link?.url });
   } catch (err) {
     console.error("checkout error:", err);
-    return res.status(500).json({ error: "server error" });
+    return res
+      .status(500)
+      .json({ error: "server error", details: String(err?.message || err) 
+});
   }
 });
 
