@@ -33,8 +33,8 @@ app.use(
   })
 );
 
-app.use(express.json({ limit: "1mb" }));
 app.options("*", cors());
+app.use(express.json({ limit: "1mb" }));
 
 /* -----------------------
    Health
@@ -47,19 +47,17 @@ app.get("/", (_req, res) => {
    Supabase
 ------------------------ */
 const SUPABASE_URL = String(process.env.SUPABASE_URL || "").trim();
-const SUPABASE_SERVICE_ROLE_KEY = 
-String(process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
+const SUPABASE_SERVICE_ROLE_KEY = String(
+  process.env.SUPABASE_SERVICE_ROLE_KEY || ""
+).trim();
 
 const supabase =
   SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
     ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
     : null;
 
-console.log("Supabase URL present:", !!SUPABASE_URL);
-console.log("Supabase service key present:", !!SUPABASE_SERVICE_ROLE_KEY);
-
 /* -----------------------
-   Helpers
+   Admin auth helper
 ------------------------ */
 function requireAdmin(req) {
   const token = String(req.headers["x-admin-token"] || "").trim();
@@ -74,16 +72,19 @@ function requireAdmin(req) {
 ------------------------ */
 app.post("/orders/create", async (req, res) => {
   try {
-    if (!supabase) return res.status(500).json({ error: "Supabase not 
-configured" });
+    if (!supabase) {
+      return res.status(500).json({ error: "Supabase not configured" });
+    }
 
-    const { items, totals, coupon, timestamp, orderId, shippingAddress } = 
-req.body || {};
+    const { items, totals, coupon, timestamp, orderId, shippingAddress } =
+      req.body || {};
 
-    if (!Array.isArray(items) || items.length === 0) return 
-res.status(400).json({ error: "items required" });
-    if (!totals || typeof totals !== "object") return 
-res.status(400).json({ error: "totals required" });
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ error: "items required" });
+    }
+    if (!totals || typeof totals !== "object") {
+      return res.status(400).json({ error: "totals required" });
+    }
 
     const payload = {
       items,
@@ -97,24 +98,33 @@ null,
       // payment_status should default to 'pending' in DB
     };
 
+    const selectCols = [
+      "id",
+      "created_at",
+      "order_id",
+      "payment_status",
+      "paid_at",
+      "shipping_status",
+      "shipped_at",
+    ].join(", ");
+
     const { data, error } = await supabase
       .from("orders")
       .insert([payload])
-      .select("id, created_at, order_id, payment_status, paid_at, 
-shipping_status, shipped_at")
+      .select(selectCols)
       .single();
 
     if (error) {
-      console.error("Supabase insert error:", error);
-      return res.status(500).json({ error: "db insert failed", details: 
-error.message });
+      console.error("orders/create insert error:", error);
+      return res
+        .status(500)
+        .json({ error: "db insert failed", details: error.message });
     }
 
     return res.json({ ok: true, order: data });
   } catch (err) {
     console.error("orders/create error:", err);
-    return res.status(500).json({ error: "server error", details: 
-String(err?.message || err) });
+    return res.status(500).json({ error: "server error" });
   }
 });
 
@@ -129,9 +139,22 @@ configured" });
     if (!requireAdmin(req)) return res.status(401).json({ error: 
 "unauthorized" });
 
-    const selectCols = "id, created_at, items, totals, coupon, 
-client_timestamp, status, order_id, shipping_address, payment_status, 
-paid_at, square_transaction_id, shipping_status, shipped_at";
+    const selectCols = [
+      "id",
+      "created_at",
+      "items",
+      "totals",
+      "coupon",
+      "client_timestamp",
+      "status",
+      "order_id",
+      "shipping_address",
+      "payment_status",
+      "paid_at",
+      "square_transaction_id",
+      "shipping_status",
+      "shipped_at",
+    ].join(", ");
 
     const { data, error } = await supabase
       .from("orders")
@@ -140,16 +163,16 @@ paid_at, square_transaction_id, shipping_status, shipped_at";
       .limit(200);
 
     if (error) {
-      console.error("Supabase list error:", error);
-      return res.status(500).json({ error: "db read failed", details: 
-error.message });
+      console.error("admin/orders read error:", error);
+      return res
+        .status(500)
+        .json({ error: "db read failed", details: error.message });
     }
 
     return res.json({ orders: data });
   } catch (err) {
     console.error("admin/orders error:", err);
-    return res.status(500).json({ error: "server error", details: 
-String(err?.message || err) });
+    return res.status(500).json({ error: "server error" });
   }
 });
 
@@ -166,8 +189,9 @@ configured" });
 "unauthorized" });
 
     const id = Number(req.params.id);
-    if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ 
-error: "invalid id" });
+    if (!Number.isFinite(id) || id <= 0) {
+      return res.status(400).json({ error: "invalid id" });
+    }
 
     const shipped = !!req.body?.shipped;
 
@@ -181,14 +205,17 @@ error: "invalid id" });
       .select("id, shipping_status, shipped_at")
       .single();
 
-    if (error) return res.status(500).json({ error: "update failed", 
-details: error.message });
+    if (error) {
+      console.error("ship update error:", error);
+      return res
+        .status(500)
+        .json({ error: "update failed", details: error.message });
+    }
 
     return res.json({ ok: true, order: data });
   } catch (err) {
-    console.error("admin ship error:", err);
-    return res.status(500).json({ error: "server error", details: 
-String(err?.message || err) });
+    console.error("ship endpoint error:", err);
+    return res.status(500).json({ error: "server error" });
   }
 });
 
@@ -207,17 +234,12 @@ const SQUARE_HOST =
     ? "https://connect.squareup.com"
     : "https://connect.squareupsandbox.com";
 
-console.log("Square env:", SQUARE_ENV);
-console.log("Square host:", SQUARE_HOST);
-console.log("Square token prefix/len:", SQUARE_ACCESS_TOKEN.slice(0, 6), 
-SQUARE_ACCESS_TOKEN.length);
-
 function looksLikePlaceholder(v) {
   return !v || v.includes("<") || v.includes(">");
 }
 
 async function squareRequest(path, method, body) {
-  const res = await fetch(`${SQUARE_HOST}${path}`, {
+  const resp = await fetch(`${SQUARE_HOST}${path}`, {
     method,
     headers: {
       Authorization: `Bearer ${SQUARE_ACCESS_TOKEN}`,
@@ -227,8 +249,8 @@ async function squareRequest(path, method, body) {
     body: body ? JSON.stringify(body) : undefined,
   });
 
-  const json = await res.json().catch(() => ({}));
-  return { ok: res.ok, status: res.status, json };
+  const json = await resp.json().catch(() => ({}));
+  return { ok: resp.ok, status: resp.status, json };
 }
 
 /* -----------------------
@@ -247,8 +269,7 @@ app.post("/square/create-checkout", async (req, res) => {
   try {
     if (looksLikePlaceholder(SQUARE_ACCESS_TOKEN) || 
 looksLikePlaceholder(SQUARE_LOCATION_ID)) {
-      return res.status(500).json({ error: "Square not configured 
-correctly" });
+      return res.status(500).json({ error: "Square not configured" });
     }
 
     const { total, currency = "USD", returnUrl, cancelUrl, orderId } = 
@@ -290,8 +311,7 @@ details: r.json });
     return res.json({ checkoutUrl: r.json?.payment_link?.url });
   } catch (err) {
     console.error("checkout error:", err);
-    return res.status(500).json({ error: "server error", details: 
-String(err?.message || err) });
+    return res.status(500).json({ error: "server error" });
   }
 });
 
