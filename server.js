@@ -19,19 +19,18 @@ const allowedOrigins = [
   process.env.ORIGIN,
 ].filter(Boolean);
 
-app.use(
-  cors({
-    origin(origin, cb) {
-      if (!origin) return cb(null, true);
-      if (allowedOrigins.includes(origin)) return cb(null, true);
-      return cb(new Error("CORS_BLOCKED"));
-    },
-    methods: ["GET", "POST", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "x-admin-token"],
-  })
-);
+const corsOptions = {
+  origin(origin, cb) {
+    if (!origin) return cb(null, true);
+    if (allowedOrigins.includes(origin)) return cb(null, true);
+    return cb(new Error("CORS_BLOCKED"));
+  },
+  methods: ["GET", "POST", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "x-admin-token", "Authorization"],
+};
 
-app.options("*", cors());
+app.use(cors(corsOptions));
+app.options("*", cors(corsOptions));
 app.use(express.json({ limit: "1mb" }));
 
 // ---------------- Health ----------------
@@ -64,8 +63,9 @@ const SQUARE_ENV = String(process.env.SQUARE_ENV ||
 "sandbox").trim().toLowerCase();
 
 const SQUARE_HOST =
-  SQUARE_ENV === "production" ? "https://connect.squareup.com" : 
-"https://connect.squareupsandbox.com";
+  SQUARE_ENV === "production"
+    ? "https://connect.squareup.com"
+    : "https://connect.squareupsandbox.com";
 
 function looksLikePlaceholder(v) {
   return !v || v.includes("<") || v.includes(">") || v.length < 10;
@@ -81,13 +81,14 @@ async function squareRequest(path, method, body) {
     },
     body: body ? JSON.stringify(body) : undefined,
   });
+
   const json = await resp.json().catch(() => ({}));
   return { ok: resp.ok, status: resp.status, json };
 }
 
 app.get("/square/debug/locations", async (_req, res) => {
   const r = await squareRequest("/v2/locations", "GET");
-  res.status(r.status).json(r.json);
+  return res.status(r.status).json(r.json);
 });
 
 // ---------------- Orders: create ----------------
@@ -116,7 +117,6 @@ req.body || {};
       client_timestamp: timestamp ? new Date(timestamp).toISOString() : 
 null,
       status: "new",
-      // Let DB default payment_status='pending'
     };
 
     const selectCols = [
@@ -136,8 +136,10 @@ null,
       .select(selectCols)
       .single();
 
-    if (error) return res.status(500).json({ error: "DB_INSERT_FAILED", 
-details: error.message });
+    if (error) {
+      return res.status(500).json({ error: "DB_INSERT_FAILED", details: 
+error.message });
+    }
 
     return res.json({ ok: true, order: data });
   } catch (e) {
@@ -147,12 +149,12 @@ details: error.message });
 });
 
 // ---------------- Orders: confirm (SuccessPage calls this) 
+----------------
 // Body: { orderId, transactionId }
 app.post("/orders/confirm", async (req, res) => {
   try {
     if (!supabase) return res.status(500).json({ error: 
 "SUPABASE_NOT_CONFIGURED" });
-
     if (looksLikePlaceholder(SQUARE_ACCESS_TOKEN)) {
       return res.status(500).json({ error: "SQUARE_NOT_CONFIGURED" });
     }
@@ -163,10 +165,12 @@ app.post("/orders/confirm", async (req, res) => {
     if (!transactionId) return res.status(400).json({ error: 
 "TRANSACTION_ID_REQUIRED" });
 
-    // ✅ Verify payment with Square
-    const payResp = await 
-squareRequest(`/v2/payments/${encodeURIComponent(String(transactionId))}`, 
-"GET");
+    // Verify payment with Square
+    const payResp = await squareRequest(
+      `/v2/payments/${encodeURIComponent(String(transactionId))}`,
+      "GET"
+    );
+
     if (!payResp.ok) {
       return res.status(400).json({ error: "SQUARE_GET_PAYMENT_FAILED", 
 details: payResp.json });
@@ -201,8 +205,10 @@ squareStatus || "UNKNOWN" });
       .select(selectCols)
       .single();
 
-    if (error) return res.status(500).json({ error: "DB_UPDATE_FAILED", 
-details: error.message });
+    if (error) {
+      return res.status(500).json({ error: "DB_UPDATE_FAILED", details: 
+error.message });
+    }
 
     const amountCents = payment?.amount_money?.amount ?? null;
     const currency = payment?.amount_money?.currency ?? "USD";
@@ -216,6 +222,7 @@ currency },
     });
   } catch (e) {
     console.error("orders/confirm", e);
+    if (res.headersSent) return;
     return res.status(500).json({ error: "SERVER_ERROR" });
   }
 });
@@ -262,7 +269,6 @@ details: error.message });
 });
 
 // ---------------- Admin: mark shipped/unshipped ----------------
-// Body: { shipped: true|false }
 app.post("/admin/orders/:id/ship", async (req, res) => {
   try {
     if (!supabase) return res.status(500).json({ error: 
@@ -309,10 +315,12 @@ looksLikePlaceholder(SQUARE_LOCATION_ID)) {
 req.body || {};
     const amount = Number(total);
 
-    if (!Number.isFinite(amount) || amount <= 0) return 
-res.status(400).json({ error: "INVALID_TOTAL" });
-    if (!returnUrl || !cancelUrl) return res.status(400).json({ error: 
-"MISSING_REDIRECT_URLS" });
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return res.status(400).json({ error: "INVALID_TOTAL", got: total });
+    }
+    if (!returnUrl || !cancelUrl) {
+      return res.status(400).json({ error: "MISSING_REDIRECT_URLS" });
+    }
 
     const payload = {
       idempotency_key: crypto.randomUUID(),
@@ -338,13 +346,22 @@ res.status(400).json({ error: "INVALID_TOTAL" });
 
     const r = await squareRequest("/v2/online-checkout/payment-links", 
 "POST", payload);
-    if (!r.ok) return res.status(500).json({ error: "SQUARE_FAILED", 
-details: r.json });
 
-    return res.json({ checkoutUrl: r.json && r.json.payment_link ? 
-r.json.payment_link.url : null });
+    if (!r.ok) {
+      return res.status(500).json({ error: "SQUARE_FAILED", details: 
+r.json });
+    }
+
+    const checkoutUrl = r.json?.payment_link?.url || null;
+    if (!checkoutUrl) {
+      return res.status(500).json({ error: "SQUARE_NO_CHECKOUT_URL", 
+details: r.json });
+    }
+
+    return res.json({ checkoutUrl });
   } catch (e) {
     console.error("square/create-checkout", e);
+    if (res.headersSent) return;
     return res.status(500).json({ error: "SERVER_ERROR" });
   }
 });
