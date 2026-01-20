@@ -147,7 +147,6 @@ details: error.message });
 });
 
 // ---------------- Orders: confirm (SuccessPage calls this) 
-----------------
 // Body: { orderId, transactionId }
 app.post("/orders/confirm", async (req, res) => {
   try {
